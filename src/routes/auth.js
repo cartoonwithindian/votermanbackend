@@ -66,6 +66,95 @@ router.get('/me', loadSession, (req, res) => {
 });
 
 // =====================================================
+// COMPLETE PROFILE (first-time registration step)
+// One-time capture of roll number + course + year + section.
+// The account is created bare by the Clerk bridge; dashboards require
+// these fields before the student can vote or apply as a candidate.
+// =====================================================
+const PROFILE_COURSES = ['BBA', 'BCA', 'BCOM', 'MBA', 'MCA'];
+const PROFILE_YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
+
+router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, res) => {
+  try {
+    const { rollNumber, department, year, section } = req.body;
+
+    const account = await db.query(
+      'SELECT id, roll_number FROM students WHERE id = $1',
+      [req.user.studentId]
+    ).then((r) => r.rows[0]);
+
+    if (!account) {
+      return authError(res, 404, 'ACCOUNT_NOT_FOUND', 'Account not found.');
+    }
+
+    // One-time step: once a roll number is stored the profile is locked.
+    // Corrections go through the administrator / support flow.
+    if (account.roll_number) {
+      return authError(res, 403, 'PROFILE_LOCKED', 'Your profile is already completed. Contact the administrator to change it.');
+    }
+
+    const roll = String(rollNumber || '').trim();
+    if (roll.length < 3 || roll.length > 64) {
+      return authError(res, 400, 'INVALID_ROLL', 'Please enter a valid roll / enrollment number (3-64 characters).');
+    }
+
+    const course = String(department || '').trim().toUpperCase();
+    if (!PROFILE_COURSES.includes(course)) {
+      return authError(res, 400, 'INVALID_COURSE', `Course must be one of: ${PROFILE_COURSES.join(', ')}.`);
+    }
+
+    const yearValue = String(year || '').trim();
+    if (!PROFILE_YEARS.includes(yearValue)) {
+      return authError(res, 400, 'INVALID_YEAR', `Year must be one of: ${PROFILE_YEARS.join(', ')}.`);
+    }
+
+    const sectionValue = String(section || '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{1,10}$/.test(sectionValue)) {
+      return authError(res, 400, 'INVALID_SECTION', 'Please enter a valid section (letters/numbers, up to 10 characters).');
+    }
+
+    // Roll number IS the student identity — must be unique.
+    const dupRoll = await db.query(
+      'SELECT id FROM students WHERE LOWER(roll_number) = LOWER($1) AND id != $2 LIMIT 1',
+      [roll, req.user.studentId]
+    ).then((r) => r.rows[0]);
+    if (dupRoll) {
+      return authError(res, 409, 'ROLL_EXISTS', 'This roll number is already registered. If it is yours, sign in with that account or contact the administrator.');
+    }
+
+    const updated = await db.query(
+      `UPDATE students
+          SET roll_number = $1, department = $2, year_or_semester = $3, section = $4,
+              updated_at = NOW()
+        WHERE id = $5
+        RETURNING roll_number, department, year_or_semester, section`,
+      [roll, course, yearValue, sectionValue, req.user.studentId]
+    ).then((r) => r.rows[0]);
+
+    await recordAudit('profile_completed', {
+      studentId: req.user.studentId,
+      ip: req.ip,
+      metadata: { department: course, year: yearValue, section: sectionValue },
+    });
+
+    return res.json({
+      data: {
+        message: 'Profile completed successfully.',
+        profile: {
+          rollNumber: updated.roll_number,
+          department: updated.department,
+          year: updated.year_or_semester,
+          section: updated.section,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Complete profile error:', error);
+    return authError(res, 500, 'INTERNAL_ERROR', 'An error occurred.');
+  }
+});
+
+// =====================================================
 // LOGIN - Role-aware authentication
 // =====================================================
 router.post('/login', loginLimiter, csrfProtection, async (req, res) => {

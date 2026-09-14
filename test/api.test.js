@@ -765,3 +765,96 @@ test('GET /api/v1/admin/monitoring returns aggregate summary for a minted admin 
   assert.equal(typeof data.business.votesCast, 'number');
   assert.equal(typeof data.business.loginAttempts, 'number');
 });
+// ============================================================
+// COMPLETE PROFILE (first-time registration step)
+// ============================================================
+async function createBareProfileStudent(prefix) {
+  const externalId = `${prefix}${randomId('')}`.slice(0, 18);
+  const hash = await hashPassword(TEST_PW);
+  const inserted = await db.query(
+    `INSERT INTO students (external_id, name, email, role, password_hash, password_change_required)
+     VALUES ($1, $2, $3, 'STUDENT', $4, FALSE)
+     RETURNING id`,
+    [externalId, `Profile ${externalId}`, `${externalId}@test.local`, hash]
+  );
+  return { id: inserted.rows[0].id, externalId };
+}
+
+async function loginProfileClient(externalId) {
+  const c = new TestClient(baseUrl);
+  const res = await c.login(externalId, TEST_PW);
+  assert.equal(res.status, 200, `login failed: ${JSON.stringify(res.json)}`);
+  return c;
+}
+
+test('POST /api/v1/auth/profile rejects unauthenticated callers', async () => {
+  const fresh = new TestClient(baseUrl);
+  const res = await fresh.request('POST', '/api/v1/auth/profile', {
+    body: { rollNumber: 'ROLLX001', department: 'BCA', year: '2nd Year', section: 'A' },
+  });
+  assert.equal(res.status, 401);
+});
+
+test('POST /api/v1/auth/profile validates input and completes once', async () => {
+  const { id, externalId } = await createBareProfileStudent('PRF');
+  try {
+    const c = await loginProfileClient(externalId);
+
+    let res = await c.request('POST', '/api/v1/auth/profile', { body: {} });
+    assert.equal(res.status, 400);
+
+    res = await c.request('POST', '/api/v1/auth/profile', {
+      body: { rollNumber: 'ROLLX001', department: 'PHYSICS', year: '2nd Year', section: 'A' },
+    });
+    assert.equal(res.status, 400);
+
+    res = await c.request('POST', '/api/v1/auth/profile', {
+      body: { rollNumber: 'ROLLX001', department: 'BCA', year: '5th Year', section: 'A' },
+    });
+    assert.equal(res.status, 400);
+
+    res = await c.request('POST', '/api/v1/auth/profile', {
+      body: { rollNumber: '  rollx001 ', department: 'bca', year: '2nd Year', section: 'a' },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.data.profile.rollNumber, 'rollx001');
+    assert.equal(res.json.data.profile.department, 'BCA');
+    assert.equal(res.json.data.profile.year, '2nd Year');
+    assert.equal(res.json.data.profile.section, 'A');
+
+    const me = await c.request('GET', '/api/v1/auth/me', { csrf: false, binding: false });
+    assert.equal(me.json.data.user.rollNumber, 'rollx001');
+    assert.equal(me.json.data.user.department, 'BCA');
+    assert.equal(me.json.data.user.year, '2nd Year');
+    assert.equal(me.json.data.user.section, 'A');
+
+    res = await c.request('POST', '/api/v1/auth/profile', {
+      body: { rollNumber: 'ROLLX002', department: 'BBA', year: '1st Year', section: 'B' },
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    await db.query('DELETE FROM sessions WHERE student_id = $1', [id]);
+    await db.query('DELETE FROM students WHERE id = $1', [id]);
+  }
+});
+
+test('POST /api/v1/auth/profile rejects duplicate roll numbers', async () => {
+  const first = await createBareProfileStudent('PR1');
+  const second = await createBareProfileStudent('PR2');
+  try {
+    const c1 = await loginProfileClient(first.externalId);
+    let res = await c1.request('POST', '/api/v1/auth/profile', {
+      body: { rollNumber: 'DUPL0001', department: 'MBA', year: '1st Year', section: 'C' },
+    });
+    assert.equal(res.status, 200);
+
+    const c2 = await loginProfileClient(second.externalId);
+    res = await c2.request('POST', '/api/v1/auth/profile', {
+      body: { rollNumber: 'dupl0001', department: 'MCA', year: '3rd Year', section: 'A' },
+    });
+    assert.equal(res.status, 409);
+  } finally {
+    await db.query('DELETE FROM sessions WHERE student_id IN ($1, $2)', [first.id, second.id]);
+    await db.query('DELETE FROM students WHERE id IN ($1, $2)', [first.id, second.id]);
+  }
+});

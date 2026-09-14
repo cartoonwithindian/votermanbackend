@@ -50,9 +50,9 @@ class CandidateApplicationService {
       throw error;
     }
 
-    const appCategory = (category || 'CLUB').toUpperCase();
-    if (appCategory !== 'CLUB' && appCategory !== 'CR' && appCategory !== 'CLASS_REPRESENTATIVE') {
-      const error = new Error('Invalid category.');
+    const appCategory = (category || 'CR').toUpperCase();
+    if (appCategory !== 'CR' && appCategory !== 'CLASS_REPRESENTATIVE') {
+      const error = new Error('Invalid category. Only Class Representative applications are accepted.');
       error.code = 'INVALID_CATEGORY';
       error.status = 400;
       throw error;
@@ -653,7 +653,7 @@ class CandidateApplicationService {
       dateOfBirth: row.date_of_birth,
       gender: row.gender,
       aadharNumber: row.aadhar_number,
-      category: row.category || 'CLUB',
+      category: row.category || 'CR',
       electionId: row.election_id || null,
       status: row.status,
       rejectionReason: row.rejection_reason,

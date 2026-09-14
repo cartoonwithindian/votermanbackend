@@ -42,6 +42,7 @@ const adminConstituencyRoutes = require('./routes/adminConstituencies');
 const receiptRoutes = require('./routes/receipts');
 const notificationRoutes = require('./routes/notifications');
 const supportRoutes = require('./routes/support');
+const uploadsRoutes = require('./routes/uploads');
 const { loadSession } = require('./middleware/loadSession');
 const { requireAuth } = require('./middleware/requireAuth');
 const { requireAdmin } = require('./middleware/requireAdmin');
@@ -239,6 +240,9 @@ app.use('/api/v1/notifications', notificationRoutes);
 
 // Support requests (authenticated)
 app.use('/api/v1/support', supportRoutes);
+
+// Photo uploads to Appwrite Storage (authenticated)
+app.use('/api/v1/uploads', uploadsRoutes);
 
 // Authenticated student's own profile (identity from session, never client-supplied)
 app.get('/api/v1/students/profile', requireAuth, studentController.profile.bind(studentController));
