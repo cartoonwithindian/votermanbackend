@@ -392,6 +392,13 @@ class CandidateApplicationService {
       ]
     );
 
+    if (result.rows.length === 0) {
+      const error = new Error('Application is not under review or no longer exists.');
+      error.code = 'INVALID_STATUS';
+      error.status = 400;
+      throw error;
+    }
+
     // Approval is what EARNS the applicant the CANDIDATE role. The login-time
     // role picker no longer grants it — this is the only promotion path.
     const appId = result.rows[0].student_id;
@@ -675,7 +682,7 @@ class CandidateApplicationService {
       dateOfBirth: row.date_of_birth,
       gender: row.gender,
       aadharNumber: row.aadhar_number,
-      category: row.category || 'CR',
+      category: row.category || 'CLUB',
       electionId: row.election_id || null,
       status: row.status,
       rejectionReason: row.rejection_reason,
