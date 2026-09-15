@@ -171,6 +171,49 @@ router.post('/login', loginLimiter, csrfProtection, async (req, res) => {
       return authError(res, 400, 'INVALID_INPUT', 'Password is required.');
     }
 
+    // ---- Demo accounts (student / candidate portals) ----
+    // Auto-provisions student@gmail.com (STUDENT) and candidate@gmail.com
+    // (CANDIDATE) with password 1234 on first login, so both portals can be
+    // demoed instantly. Real accounts are unaffected.
+    const demoEmail = String(userIdentifier || '').trim().toLowerCase();
+    const DEMO_ACCOUNTS = {
+      'student@gmail.com': { role: 'STUDENT', name: 'Demo Student', externalId: 'STU-DEMO' },
+      'candidate@gmail.com': { role: 'CANDIDATE', name: 'Demo Candidate', externalId: 'CAND-DEMO' },
+    };
+    if (DEMO_ACCOUNTS[demoEmail] && password === '1234') {
+      try {
+        const demo = DEMO_ACCOUNTS[demoEmail];
+        const demoHash = await hashPassword('1234');
+        const existingDemo = await db.query(
+          'SELECT id FROM students WHERE LOWER(email) = $1 LIMIT 1',
+          [demoEmail]
+        ).then(r => r.rows[0]);
+        if (!existingDemo) {
+          await db.query(
+            `INSERT INTO students (external_id, name, email, password_hash, role, is_active, username,
+                                   password_change_required, roll_number, department, year_or_semester, section)
+             VALUES ($1, $2, $3, $4, $5, TRUE, $6, FALSE, $7, $8, $9, $10)
+             ON CONFLICT DO NOTHING`,
+            [demo.externalId, demo.name, demoEmail, demoHash, demo.role,
+             demoEmail.split('@')[0], 'DEMO-001', 'BCA', '2nd Year', 'A']
+          );
+        } else {
+          // Keep the demo credentials usable even if the row pre-existed.
+          await db.query(
+            `UPDATE students
+                SET password_hash = $1, role = $2, is_active = TRUE,
+                    password_change_required = FALSE, locked_until = NULL,
+                    failed_login_attempts = 0,
+                    roll_number = COALESCE(roll_number, $3)
+              WHERE LOWER(email) = $4`,
+            [demoHash, demo.role, 'DEMO-001', demoEmail]
+          );
+        }
+      } catch (demoErr) {
+        console.error('Demo account provision error:', demoErr.message);
+      }
+    }
+
     // Validate role. When omitted, the account's actual DB role is used
     // (the main portal lets any role sign in; dashboards route by DB role).
     const validRoles = ['STUDENT', 'CANDIDATE', 'ADMIN', 'CAD'];
@@ -443,23 +486,18 @@ router.post('/otp/send-login', otpLimiter, csrfProtection, async (req, res) => {
     ).then(r => r.rows[0]);
 
     if (account) {
-      // Account exists - check role matches
-      if (account.role !== requestedRole) {
-        // Role mismatch - use generic response to prevent enumeration
-        // Still send OTP to prevent account enumeration, but it won't work for wrong role
-        // Actually, don't send OTP - just return success to prevent enumeration
-        return res.json({
-          data: {
-            message: 'If an account matches the information provided, a verification code has been sent.',
-          },
-        });
-      }
+      // Role comes from the ACCOUNT, not the portal picker: send the OTP
+      // against the account's actual role so verification logs the user in
+      // with their real role (frontend routes by the returned user.role).
+      // Previously a role mismatch returned a fake "code sent" success without
+      // creating an OTP — trapping the user in a verify-expired loop.
+      const effectiveLoginRole = account.role || requestedRole;
 
       // Valid account - create OTP
       const { id: challengeId, otp, expiresAt } = await createOtpChallenge(
         email.toLowerCase(),
         'LOGIN_OTP',
-        requestedRole,
+        effectiveLoginRole,
         req.ip
       );
 
@@ -474,7 +512,7 @@ router.post('/otp/send-login', otpLimiter, csrfProtection, async (req, res) => {
       await recordAudit('otp_sent', {
         studentId: account.id,
         ip: req.ip,
-        metadata: { purpose: 'LOGIN_OTP', role: requestedRole },
+        metadata: { purpose: 'LOGIN_OTP', role: effectiveLoginRole },
       });
 
       return res.json({
@@ -603,10 +641,10 @@ router.post('/otp/verify-login', otpLimiter, csrfProtection, async (req, res) =>
       return authError(res, 400, 'INVALID_OTP', 'Invalid verification code.');
     }
 
-    // Verify role matches (belt and suspenders check)
-    if (accountData.role !== requestedRole) {
-      return authError(res, 403, 'ROLE_MISMATCH', 'This account does not match the selected role.');
-    }
+    // Log in with the ACCOUNT's actual role — the portal picker is advisory
+    // only. The frontend routes by the returned user.role, so a candidate who
+    // used the student portal still lands on the candidate dashboard.
+    const actualRole = accountData.role || requestedRole;
 
     // Create session
     const bindingToken = await createSession(res, accountData.id, false);
@@ -614,7 +652,7 @@ router.post('/otp/verify-login', otpLimiter, csrfProtection, async (req, res) =>
     await recordAudit('otp_login_completed', {
       studentId: accountData.id,
       ip: req.ip,
-      metadata: { role: requestedRole },
+      metadata: { role: actualRole },
     });
 
     return res.json({
@@ -976,7 +1014,7 @@ router.post('/reset-password', passwordResetLimiter, csrfProtection, async (req,
 // =====================================================
 // OTP: Register New Account
 // =====================================================
-router.post('/register/otp', registerLimiter, csrfProtection, async (req, res) => {
+async function registerOtpHandler(req, res) {
   try {
     const { email, username, password, confirmPassword, role } = req.body;
 
@@ -1095,12 +1133,26 @@ router.post('/register/otp', registerLimiter, csrfProtection, async (req, res) =
     console.error('Registration OTP error:', error);
     return authError(res, 500, 'INTERNAL_ERROR', 'An error occurred.');
   }
+}
+
+router.post('/register/otp', registerLimiter, csrfProtection, registerOtpHandler);
+
+// Per-role registration endpoints: the student and candidate forms each call
+// their own API so the two flows cannot cross-wire roles.
+router.post('/register/student/otp', registerLimiter, csrfProtection, (req, res) => {
+  req.body.role = 'STUDENT';
+  return registerOtpHandler(req, res);
+});
+
+router.post('/register/candidate/otp', registerLimiter, csrfProtection, (req, res) => {
+  req.body.role = 'CANDIDATE';
+  return registerOtpHandler(req, res);
 });
 
 // =====================================================
 // OTP: Complete Registration
 // =====================================================
-router.post('/register/verify', otpLimiter, csrfProtection, async (req, res) => {
+async function registerVerifyHandler(req, res) {
   try {
     const { email, otp, username, fullName, mobileNumber, enrollmentNumber, password, role } = req.body;
 
@@ -1252,6 +1304,18 @@ router.post('/register/verify', otpLimiter, csrfProtection, async (req, res) => 
     console.error('Registration verify error:', error);
     return authError(res, 500, 'INTERNAL_ERROR', 'An error occurred.');
   }
+}
+
+router.post('/register/verify', otpLimiter, csrfProtection, registerVerifyHandler);
+
+router.post('/register/student/verify', otpLimiter, csrfProtection, (req, res) => {
+  req.body.role = 'STUDENT';
+  return registerVerifyHandler(req, res);
+});
+
+router.post('/register/candidate/verify', otpLimiter, csrfProtection, (req, res) => {
+  req.body.role = 'CANDIDATE';
+  return registerVerifyHandler(req, res);
 });
 
 // =====================================================
