@@ -16,11 +16,12 @@ router.get('/', requireAdmin, studentController.list.bind(studentController));
 // POST /api/v1/admin/students - Create student (admin only)
 router.post('/', requireAdmin, csrfProtection, studentController.create.bind(studentController));
 
+// PATCH /api/v1/admin/students/bulk-voting-eligible - Set voting eligibility for all students
+// NOTE: must be defined BEFORE /:id or Express matches "bulk-voting-eligible" as :id
+router.patch('/bulk-voting-eligible', requireAdmin, csrfProtection, studentController.bulkSetVotingEligible.bind(studentController));
+
 // PATCH /api/v1/admin/students/:id - Update student (admin only)
 router.patch('/:id', requireAdmin, csrfProtection, studentController.update.bind(studentController));
-
-// PATCH /api/v1/admin/students/bulk-voting-eligible - Set voting eligibility for all students
-router.patch('/bulk-voting-eligible', requireAdmin, csrfProtection, studentController.bulkSetVotingEligible.bind(studentController));
 
 // PATCH /api/v1/admin/students/:id/status - Update student status (admin only)
 router.patch('/:id/status', requireAdmin, csrfProtection, studentController.updateStatus.bind(studentController));
