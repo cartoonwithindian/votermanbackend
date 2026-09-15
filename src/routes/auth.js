@@ -225,14 +225,19 @@ router.post('/login', loginLimiter, csrfProtection, async (req, res) => {
     // Find account by identifier
     const account = await findStudentByIdentifierOrEmail(userIdentifier.trim());
 
-    // Check if account exists
+    // Check if account exists — unknown emails get an explicit "no account
+    // found" (404 + needsRegistration) so first-time users are told to
+    // register. Wrong passwords still get a generic 401 below.
     if (!account) {
       incFailedLogin();
       await recordAudit('login_failed', {
         ip: req.ip,
         metadata: { identifier: userIdentifier, role: requestedRole, reason: 'account_not_found' },
       });
-      return authError(res, 401, 'INVALID_CREDENTIALS', 'Invalid username or password.');
+      return res.status(404).json({
+        error: { code: 'ACCOUNT_NOT_FOUND', message: 'No account found for this email. Please register first.' },
+        data: { needsRegistration: true },
+      });
     }
 
     // ENFORCE ROLE SEPARATION - Critical security check
