@@ -142,9 +142,10 @@ test('login with wrong password returns 401 with generic error', async () => {
   assert.ok(res.json.error);
 });
 
-test('login with unknown user returns 401', async () => {
+test('login with unknown user returns 404 ACCOUNT_NOT_FOUND', async () => {
   const res = await client.login('NOBODY999', 'WhateverPassword1!');
-  assert.equal(res.status, 401);
+  assert.equal(res.status, 404);
+  assert.equal(res.json.error.code, 'ACCOUNT_NOT_FOUND');
 });
 
 test('login with missing identifier returns 400', async () => {

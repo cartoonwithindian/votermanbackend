@@ -67,12 +67,12 @@ router.get('/me', loadSession, (req, res) => {
 
 // =====================================================
 // COMPLETE PROFILE (first-time registration step)
-// One-time capture of roll number + course + year + section.
+// One-time capture of roll number + course + batch (section + year).
 // The account is created bare by the Clerk bridge; dashboards require
 // these fields before the student can vote or apply as a candidate.
 // =====================================================
-const PROFILE_COURSES = ['BBA', 'BCA', 'BCOM', 'MBA', 'MCA'];
-const PROFILE_YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
+const PROFILE_COURSES = ['BBA', 'BCA', 'BCom', 'MBA', 'MCA'];
+const PROFILE_YEARS = ['1st Year', '2nd Year', '3rd Year'];
 
 router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, res) => {
   try {
@@ -98,8 +98,9 @@ router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, re
       return authError(res, 400, 'INVALID_ROLL', 'Please enter a valid roll / enrollment number (3-64 characters).');
     }
 
-    const course = String(department || '').trim().toUpperCase();
-    if (!PROFILE_COURSES.includes(course)) {
+    const courseInput = String(department || '').trim();
+    const course = PROFILE_COURSES.find((c) => c.toLowerCase() === courseInput.toLowerCase()) || '';
+    if (!course) {
       return authError(res, 400, 'INVALID_COURSE', `Course must be one of: ${PROFILE_COURSES.join(', ')}.`);
     }
 
@@ -109,7 +110,7 @@ router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, re
     }
 
     const sectionValue = String(section || '').trim().toUpperCase();
-    if (!/^[A-Z0-9]{1,10}$/.test(sectionValue)) {
+    if (!/^[A-Z0-9]{0,10}$/.test(sectionValue)) {
       return authError(res, 400, 'INVALID_SECTION', 'Please enter a valid section (letters/numbers, up to 10 characters).');
     }
 
@@ -195,7 +196,7 @@ router.post('/login', loginLimiter, csrfProtection, async (req, res) => {
              VALUES ($1, $2, $3, $4, $5, TRUE, $6, FALSE, $7, $8, $9, $10)
              ON CONFLICT DO NOTHING`,
             [demo.externalId, demo.name, demoEmail, demoHash, demo.role,
-             demoEmail.split('@')[0], 'DEMO-001', 'BCA', '2nd Year', 'A']
+             demoEmail.split('@')[0], 'DEMO-001', 'BCA', '2nd Year', 'A1']
           );
         } else {
           // Keep the demo credentials usable even if the row pre-existed.
