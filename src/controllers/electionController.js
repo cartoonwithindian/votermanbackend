@@ -4,6 +4,7 @@
  */
 
 const electionService = require('../services/electionService');
+const candidateAppService = require('../services/candidateApplicationService');
 const { auditLog } = require('../db');
 
 const VALID_STATUSES = ['DRAFT', 'SCHEDULED', 'OPEN', 'CLOSED', 'PUBLISHED'];
@@ -321,7 +322,20 @@ class ElectionController {
         userAgent: req.get('User-Agent'),
       });
 
-      res.json({ data: result.election });
+      // Opening the election makes every approved CR candidate ballot-ready:
+      // auto-place any approved-but-unplaced applications onto this
+      // election's constituencies. Best-effort — never fails the status change.
+      let autoPlaced = [];
+      if (status === 'OPEN') {
+        try {
+          const outcome = await candidateAppService.placeUnplacedForElection(parseInt(id));
+          autoPlaced = outcome.placed;
+        } catch (err) {
+          console.warn('updateStatus: auto ballot placement failed', { electionId: id, code: err.code || err.message });
+        }
+      }
+
+      res.json({ data: result.election, meta: { autoPlaced } });
     } catch (err) {
       next(err);
     }

@@ -326,7 +326,7 @@ class CandidateApplicationService {
               electionId: el.id,
               department: app.department,
               year: app.year,
-              section: app.section,
+              section: app.section || '',
               activeOnly: true,
             });
             if (constituency) {
@@ -341,7 +341,7 @@ class CandidateApplicationService {
             electionId,
             department: app.department,
             year: app.year,
-            section: app.section,
+            section: app.section || '',
             activeOnly: true,
           });
           if (constituency) {
@@ -353,7 +353,16 @@ class CandidateApplicationService {
       // Only place on ballot if we successfully resolved everything.
       if (constituencyId && electionId) {
         const positions = await positionService.findByConstituencyId(constituencyId);
-        const crPosition = positions.find(p => p.constituency_id === constituencyId);
+
+        // Route the approved applicant onto the seat matching their gender
+        // (Boy CR -> Male seat, Girl CR -> Female seat). Fall back to any CR
+        // seat in the constituency for legacy/unisex seats or applications
+        // with no / 'Other' gender.
+        const gender = String(app.gender || '').trim();
+        const genderedSeat = (gender === 'Male' || gender === 'Female')
+          ? positions.find(p => p.gender === gender)
+          : null;
+        const crPosition = genderedSeat || positions.find(p => p.constituency_id === constituencyId);
         if (!crPosition) {
           const error = new Error('No Class Representative position exists for this constituency.');
           error.code = 'CONSTITUENCY_POSITION_MISSING';
@@ -435,6 +444,212 @@ class CandidateApplicationService {
     }
 
     return this.formatApplication(result.rows[0]);
+  }
+
+  /**
+   * Place an already-approved CR application onto its ballot.
+   *
+   * Approvals made before a matching constituency existed (or while the
+   * election was still DRAFT) carry no election/position link and therefore
+   * no ballot row. This resolves the seat with the same rules as approve():
+   * an explicit constituencyId wins (identity must match exactly), otherwise
+   * auto-resolve the latest non-draft election with a matching active
+   * constituency — then links election/position and creates the ballot row.
+   *
+   * context: { electionId?, constituencyId? }
+   */
+  async assignBallot(id, context = {}) {
+    const app = await this.getById(id);
+
+    if (!app) {
+      const error = new Error('Application not found.');
+      error.code = 'NOT_FOUND';
+      error.status = 404;
+      throw error;
+    }
+
+    if (app.status !== 'approved') {
+      const error = new Error('Only approved applications can be placed on a ballot.');
+      error.code = 'INVALID_STATUS_TRANSITION';
+      error.status = 400;
+      throw error;
+    }
+
+    const isCR = app.category === 'CR' || app.category === 'CLASS_REPRESENTATIVE';
+    if (!isCR) {
+      const error = new Error('Only Class Representative applications can be placed on a CR ballot.');
+      error.code = 'INVALID_CATEGORY';
+      error.status = 400;
+      throw error;
+    }
+
+    const match = (a, b) => (a ?? '').toString().trim().toLowerCase() === (b ?? '').toString().trim().toLowerCase();
+
+    let constituencyId = context.constituencyId ? parseInt(context.constituencyId) : null;
+    let electionId = context.electionId ? parseInt(context.electionId) : (app.electionId || null);
+
+    if (constituencyId) {
+      const constituency = await constituencyService.findById(constituencyId);
+      if (!constituency) {
+        const error = new Error('Constituency not found.');
+        error.code = 'CONSTITUENCY_NOT_FOUND';
+        error.status = 404;
+        throw error;
+      }
+      if (!match(constituency.department, app.department) ||
+          !match(constituency.year, app.year) ||
+          !match(constituency.section, app.section)) {
+        const error = new Error(
+          'Constituency does not match the applicant\u2019s department/year/section.'
+        );
+        error.code = 'CONSTITUENCY_MISMATCH';
+        error.status = 400;
+        throw error;
+      }
+      electionId = electionId || constituency.election_id;
+      if (electionId !== constituency.election_id) {
+        const error = new Error('Election does not match the constituency\u2019s election.');
+        error.code = 'CONSTITUENCY_MISMATCH';
+        error.status = 400;
+        throw error;
+      }
+    } else {
+      if (!electionId) {
+        const elections = await electionService.findAll({ excludeDraft: true, limit: 10 });
+        for (const el of elections) {
+          const constituency = await constituencyService.findMatching({
+            electionId: el.id,
+            department: app.department,
+            year: app.year,
+            section: app.section || '',
+            activeOnly: true,
+          });
+          if (constituency) {
+            electionId = el.id;
+            constituencyId = constituency.id;
+            break;
+          }
+        }
+      }
+      if (electionId && !constituencyId) {
+        const constituency = await constituencyService.findMatching({
+          electionId,
+          department: app.department,
+          year: app.year,
+          section: app.section || '',
+          activeOnly: true,
+        });
+        if (constituency) {
+          constituencyId = constituency.id;
+        }
+      }
+    }
+
+    if (!constituencyId || !electionId) {
+      const error = new Error('No matching election/constituency found for this applicant.');
+      error.code = 'CONSTITUENCY_NOT_FOUND';
+      error.status = 409;
+      throw error;
+    }
+
+    const positions = await positionService.findByConstituencyId(constituencyId);
+    const gender = String(app.gender || '').trim();
+    const genderedSeat = (gender === 'Male' || gender === 'Female')
+      ? positions.find(p => p.gender === gender)
+      : null;
+    const crPosition = genderedSeat || positions.find(p => p.constituency_id === constituencyId);
+    if (!crPosition) {
+      const error = new Error('No Class Representative position exists for this constituency.');
+      error.code = 'CONSTITUENCY_POSITION_MISSING';
+      error.status = 409;
+      throw error;
+    }
+
+    const result = await db.query(
+      `UPDATE candidate_applications
+       SET election_id = $2,
+           position_id = $3,
+           updated_at = NOW()
+       WHERE id = $1 AND status = 'approved'
+       RETURNING *`,
+      [id, electionId, crPosition.id]
+    );
+
+    if (result.rows.length === 0) {
+      const error = new Error('Application is no longer approved.');
+      error.code = 'INVALID_STATUS';
+      error.status = 409;
+      throw error;
+    }
+
+    // Create the ballot row best-effort (a re-place hits the unique
+    // (position_id, name) constraint and is safely skipped).
+    try {
+      await candidateService.create({
+        position_id: result.rows[0].position_id,
+        name: result.rows[0].full_name,
+        description: result.rows[0].bio || result.rows[0].manifesto || null,
+        image_url: result.rows[0].profile_photo_url || null,
+      });
+    } catch (err) {
+      if (err.code !== '23505' && err.code !== '23503') {
+        throw err;
+      }
+      console.warn(
+        'assignBallot: could not create candidates ballot row',
+        { applicationId: id, positionId: result.rows[0].position_id, code: err.code }
+      );
+    }
+
+    return this.formatApplication(result.rows[0]);
+  }
+
+  /**
+   * Place every approved-but-unplaced CR application matching this election's
+   * constituencies onto its ballot. Called automatically when an election
+   * opens so approval always means ballot-ready — no manual step.
+   * Best-effort per application: failures are skipped with a warn log and
+   * reported in `skipped`, never thrown.
+   */
+  async placeUnplacedForElection(electionId) {
+    const pending = await db.query(
+      `SELECT id FROM candidate_applications
+       WHERE status = 'approved'
+         AND (category = 'CR' OR category = 'CLASS_REPRESENTATIVE')
+         AND (election_id IS NULL OR position_id IS NULL)`
+    );
+
+    const placed = [];
+    const skipped = [];
+    for (const row of pending.rows) {
+      try {
+        const app = await this.getById(row.id);
+        if (!app) {
+          skipped.push(row.id);
+          continue;
+        }
+        const constituency = await constituencyService.findMatching({
+          electionId,
+          department: app.department,
+          year: app.year,
+          section: app.section || '',
+          activeOnly: true,
+        });
+        if (!constituency) {
+          skipped.push(row.id);
+          continue;
+        }
+        await this.assignBallot(row.id, { electionId, constituencyId: constituency.id });
+        placed.push(row.id);
+      } catch (err) {
+        console.warn(
+          'placeUnplacedForElection: skipped application',
+          { applicationId: row.id, code: err.code || err.message }
+        );
+        skipped.push(row.id);
+      }
+    }
+    return { placed, skipped };
   }
 
   /**
@@ -702,9 +917,10 @@ class CandidateApplicationService {
    * @param {number} options.positionId - Filter by position ID
    * @param {string} options.department - Filter by department
    * @param {string} options.section - Filter by section
+   * @param {string} options.year - Filter by year
    */
   async findApprovedForAdmin(options = {}) {
-    const { positionId, department, section } = options;
+    const { positionId, department, section, year } = options;
 
     let query = `
       SELECT
@@ -716,11 +932,11 @@ class CandidateApplicationService {
         ca.year,
         ca.section,
         ca.position_id,
+        ca.category,
         p.name AS position_name,
-        ca.status,
-        ca.is_active
+        ca.status
       FROM candidate_applications ca
-      JOIN positions p ON ca.position_id = p.id
+      LEFT JOIN positions p ON ca.position_id = p.id
       WHERE ca.status = 'approved'
     `;
 
@@ -742,6 +958,12 @@ class CandidateApplicationService {
     if (section && section !== 'all') {
       query += ` AND ca.section = $${paramIndex}`;
       params.push(section);
+      paramIndex++;
+    }
+
+    if (year && year !== 'all') {
+      query += ` AND ca.year = $${paramIndex}`;
+      params.push(year);
       paramIndex++;
     }
 

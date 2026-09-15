@@ -17,7 +17,6 @@ class CandidateService {
    * Uses candidate_applications with status='approved'.
    *
    * @param {Object} options
-   * @param {boolean} options.activeOnly - Filter by is_active (default: true)
    * @param {number} options.limit - Result limit
    * @param {number} options.offset - Result offset
    * @param {string} options.gender - Filter by gender (Male, Female, Other)
@@ -27,7 +26,6 @@ class CandidateService {
    */
   async findApproved(options = {}) {
     const {
-      activeOnly = true,
       limit = 100,
       offset = 0,
       gender,
@@ -48,7 +46,6 @@ class CandidateService {
         ca.section,
         ca.bio AS description,
         ca.profile_photo_url AS image_url,
-        ca.is_active,
         p.id AS position_id,
         p.name AS position_name,
         e.id AS election_id,
@@ -61,10 +58,6 @@ class CandidateService {
 
     const params = [];
     let paramIndex = 1;
-
-    if (activeOnly) {
-      query += ` AND ca.is_active = true`;
-    }
 
     // Add filters
     if (gender && gender !== 'all') {
@@ -113,7 +106,6 @@ class CandidateService {
         ca.section,
         ca.bio AS description,
         ca.profile_photo_url AS image_url,
-        ca.is_active,
         p.id AS position_id,
         p.name AS position_name,
         e.id AS election_id,
@@ -136,7 +128,7 @@ class CandidateService {
     let query = `
       SELECT COUNT(*) as count
       FROM candidate_applications
-      WHERE status = 'approved' AND is_active = true
+      WHERE status = 'approved'
     `;
 
     const params = [];
@@ -283,6 +275,22 @@ class CandidateService {
   async canCreate(positionId) {
     const status = await this.getElectionStatusByPositionId(positionId);
     return status === 'DRAFT' || status === 'SCHEDULED';
+  }
+
+  /**
+   * Create a ballot row in `candidates` for an approved applicant.
+   * Used by approval/assign-ballot flows. Duplicate (position_id, name)
+   * surfaces as 23505 for the caller to swallow; unknown position as 23503.
+   */
+  async create({ position_id, name, description = null, image_url = null }) {
+    const result = await db.query(
+      `INSERT INTO candidates (position_id, name, description, image_url, display_order)
+       VALUES ($1, $2, $3, $4,
+         COALESCE((SELECT MAX(display_order) + 1 FROM candidates WHERE position_id = $1), 1))
+       RETURNING *`,
+      [position_id, name, description, image_url]
+    );
+    return result.rows[0];
   }
 
   /**

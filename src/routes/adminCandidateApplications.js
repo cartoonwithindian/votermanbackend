@@ -24,6 +24,10 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
+// GET /api/admin/candidates/approved - Get all approved candidates for admin position management
+// NOTE: registered before '/:id' so "approved" is not swallowed as an ID.
+router.get('/approved', requireAuth, requireAdmin, candidateAppController.listApproved.bind(candidateAppController));
+
 // GET /api/admin/candidates - List all candidate applications
 router.get('/', requireAuth, requireAdmin, candidateAppController.listForAdmin.bind(candidateAppController));
 
@@ -39,7 +43,7 @@ router.patch('/:id/reject', requireAuth, requireAdmin, csrfProtection, candidate
 // PATCH /api/admin/candidates/:id/request-changes - Request changes
 router.patch('/:id/request-changes', requireAuth, requireAdmin, csrfProtection, candidateAppController.requestChanges.bind(candidateAppController));
 
-// GET /api/admin/candidates/approved - Get all approved candidates for admin position management
-router.get('/approved', requireAuth, requireAdmin, candidateAppController.listApproved.bind(candidateAppController));
+// POST /api/admin/candidate-applications/:id/assign-ballot - Place an approved CR application onto its ballot
+router.post('/:id/assign-ballot', requireAuth, requireAdmin, csrfProtection, candidateAppController.assignBallot.bind(candidateAppController));
 
 module.exports = router;

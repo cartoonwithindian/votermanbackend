@@ -52,6 +52,10 @@ async function teardownBaseElection(client) {
     `DELETE FROM candidates WHERE position_id IN (SELECT id FROM positions WHERE club_id = 1)`,
     'DELETE FROM positions WHERE club_id = 1',
     'DELETE FROM clubs WHERE id = 1',
+    `DELETE FROM candidate_applications WHERE position_id IN (SELECT id FROM positions WHERE constituency_id IN (SELECT id FROM constituencies WHERE election_id = 1))`,
+    `DELETE FROM candidates WHERE position_id IN (SELECT id FROM positions WHERE constituency_id IN (SELECT id FROM constituencies WHERE election_id = 1))`,
+    `DELETE FROM positions WHERE constituency_id IN (SELECT id FROM constituencies WHERE election_id = 1)`,
+    'DELETE FROM constituencies WHERE election_id = 1',
     `DELETE FROM elections WHERE id = 1 OR name = '${ELECTION_NAME.replace(/'/g, "''")}'`,
   ];
   for (const sql of steps) {

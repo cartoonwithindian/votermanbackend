@@ -5,6 +5,10 @@
 
 const candidateAppService = require('../services/candidateApplicationService');
 
+// Courses whose batches are year-only (no A/B/C sections): CR applications
+// for these may omit `section`. Mirrors frontend src/lib/class-data.ts.
+const SECTIONLESS_COURSES = ['MBA', 'MCA', 'BCom'];
+
 class CandidateApplicationController {
   /**
    * POST /api/candidates/apply
@@ -23,12 +27,21 @@ class CandidateApplicationController {
         });
       }
 
-      // Validate required fields. CR applications require a section so the
-      // constituency seat can be resolved at approval.
+      // Validate required fields. CR applications for sectioned courses (BBA,
+      // BCA) require a section so the constituency seat can be resolved at
+      // approval; sectionless courses (MBA, MCA, BCom) may omit it.
       const requiredFields = [
-        'fullName', 'enrollmentNumber', 'department', 'year', 'section', 'email', 'phone',
+        'fullName', 'enrollmentNumber', 'department', 'year', 'email', 'phone',
         'bio', 'manifesto', 'age', 'dateOfBirth', 'gender', 'aadharNumber'
       ];
+
+      const department = String(applicationData.department || '').trim();
+      const isSectionlessCourse = SECTIONLESS_COURSES.some(
+        (course) => department.toUpperCase() === course.toUpperCase()
+      );
+      if (!isSectionlessCourse) {
+        requiredFields.push('section');
+      }
 
       for (const field of requiredFields) {
         if (!applicationData[field] || String(applicationData[field]).trim() === '') {
@@ -407,17 +420,38 @@ class CandidateApplicationController {
   }
 
   /**
+   * POST /api/admin/candidate-applications/:id/assign-ballot
+   * Place an already-approved CR application onto its ballot
+   */
+  async assignBallot(req, res, next) {
+    try {
+      const { id } = req.params;
+
+      const updated = await candidateAppService.assignBallot(id, req.body || {});
+
+      return res.json({
+        success: true,
+        message: 'Candidate placed on the ballot.',
+        application: updated,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * GET /api/admin/candidates/approved - List all approved candidates
    * For admin position management with class/section/CR filtering
    */
   async listApproved(req, res, next) {
     try {
-      const { position_id, department, section } = req.query;
+      const { position_id, department, section, year } = req.query;
 
       const candidates = await candidateAppService.findApprovedForAdmin({
         positionId: position_id ? parseInt(position_id) : undefined,
         department,
         section,
+        year,
       });
 
       return res.json({

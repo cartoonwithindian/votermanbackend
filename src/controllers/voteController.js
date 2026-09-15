@@ -220,7 +220,9 @@ class VoteController {
       }
 
       const row = student.rows[0];
-      if (!row.section) {
+      // Section-less courses (MCA, MBA, BCom) store section as ""/NULL —
+      // they still resolve their constituency by department + year.
+      if (!row.department || !row.year_or_semester) {
         return res.json({ data: { constituency: null } });
       }
 
@@ -228,7 +230,7 @@ class VoteController {
         electionId: electionIdInt,
         department: row.department,
         year: row.year_or_semester,
-        section: row.section,
+        section: row.section || '',
       });
 
       res.json({ data: { constituency } });

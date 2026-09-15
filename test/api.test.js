@@ -454,7 +454,7 @@ test('CR: fixtures are cleaned up for subsequent runs', async () => {
   await db.query('DELETE FROM vote_receipts WHERE vote_id IN (SELECT id FROM votes WHERE position_id = $1)', [crPositionId]);
   await db.query('DELETE FROM votes WHERE position_id = $1', [crPositionId]);
   await db.query('DELETE FROM candidates WHERE position_id = $1', [crPositionId]);
-  await db.query('DELETE FROM positions WHERE id = $1', [crPositionId]);
+  await db.query('DELETE FROM positions WHERE constituency_id = $1', [crConstituencyId]);
   await db.query('DELETE FROM constituencies WHERE id = $1', [crConstituencyId]);
   await db.query('DELETE FROM voter_authorizations WHERE student_id = $1', [attackerStudentId]);
 });
@@ -505,7 +505,7 @@ test('admin section edit: candidates expose their CR application as pre-fill', a
       'DELETE FROM candidate_applications WHERE student_id = $1 AND category = $2',
       [testStudentId, 'CLASS_REPRESENTATIVE']
     );
-    await db.query('DELETE FROM positions WHERE id = $1', [pos.rows[0].id]);
+    await db.query('DELETE FROM positions WHERE constituency_id = $1', [constituency.id]);
     await db.query('DELETE FROM constituencies WHERE id = $1', [constituency.id]);
     await db.query(
       `UPDATE students SET department = NULL, year_or_semester = NULL, section = NULL WHERE id = $1`,
@@ -857,5 +857,87 @@ test('POST /api/v1/auth/profile rejects duplicate roll numbers', async () => {
   } finally {
     await db.query('DELETE FROM sessions WHERE student_id IN ($1, $2)', [first.id, second.id]);
     await db.query('DELETE FROM students WHERE id IN ($1, $2)', [first.id, second.id]);
+  }
+});
+
+// ============================================================
+// CANDIDATE APPLY (sectionless course regression)
+// ============================================================
+async function createApplyStudent(prefix) {
+  const externalId = `${prefix}${randomId('')}`.slice(0, 18);
+  const hash = await hashPassword(TEST_PW);
+  const inserted = await db.query(
+    `INSERT INTO students (external_id, name, email, role, password_hash, password_change_required)
+     VALUES ($1, $2, $3, 'STUDENT', $4, FALSE)
+     RETURNING id`,
+    [externalId, `Apply ${externalId}`, `${externalId}@test.local`, hash]
+  );
+  return { id: inserted.rows[0].id, externalId };
+}
+
+function applyPayload(overrides = {}) {
+  return {
+    fullName: 'Apply Test Student',
+    enrollmentNumber: `ENR${randomId('')}`.slice(0, 20),
+    department: 'MBA',
+    year: '1st Year',
+    category: 'CR',
+    email: `${randomId('')}@test.local`,
+    phone: '9876543210',
+    bio: 'A short bio',
+    manifesto: 'A short manifesto',
+    age: 21,
+    dateOfBirth: '2005-01-15',
+    gender: 'Other',
+    aadharNumber: `${Date.now()}`.slice(-12).padStart(12, '0'),
+    ...overrides,
+  };
+}
+
+test('POST /api/candidates/apply accepts sectionless courses without a section', async () => {
+  const { id, externalId } = await createApplyStudent('APM');
+  try {
+    const c = await loginProfileClient(externalId);
+    const res = await c.request('POST', '/api/candidates/apply', {
+      body: applyPayload({ department: 'MBA' }),
+    });
+    assert.equal(res.status, 201, JSON.stringify(res.json));
+    assert.equal(res.json.application.department, 'MBA');
+    assert.equal(res.json.application.section, null);
+
+    const row = await db.query(
+      'SELECT section, status FROM candidate_applications WHERE student_id = $1',
+      [id]
+    );
+    assert.equal(row.rows.length, 1);
+    assert.equal(row.rows[0].section, null);
+    assert.equal(row.rows[0].status, 'under_review');
+  } finally {
+    await db.query('DELETE FROM candidate_applications WHERE student_id = $1', [id]);
+    await db.query('DELETE FROM sessions WHERE student_id = $1', [id]);
+    await db.query('DELETE FROM students WHERE id = $1', [id]);
+  }
+});
+
+test('POST /api/candidates/apply still requires a section for sectioned courses', async () => {
+  const { id, externalId } = await createApplyStudent('APB');
+  try {
+    const c = await loginProfileClient(externalId);
+
+    const missing = await c.request('POST', '/api/candidates/apply', {
+      body: applyPayload({ department: 'BCA' }),
+    });
+    assert.equal(missing.status, 400, JSON.stringify(missing.json));
+    assert.match(missing.json.message, /section/i);
+
+    const withSection = await c.request('POST', '/api/candidates/apply', {
+      body: applyPayload({ department: 'BCA', section: 'A' }),
+    });
+    assert.equal(withSection.status, 201, JSON.stringify(withSection.json));
+    assert.equal(withSection.json.application.section, 'A');
+  } finally {
+    await db.query('DELETE FROM candidate_applications WHERE student_id = $1', [id]);
+    await db.query('DELETE FROM sessions WHERE student_id = $1', [id]);
+    await db.query('DELETE FROM students WHERE id = $1', [id]);
   }
 });

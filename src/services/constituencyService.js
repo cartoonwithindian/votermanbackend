@@ -10,14 +10,20 @@
 
 const db = require('../db');
 
-const CR_POSITION_NAME = 'Class Representative';
+// Each class constituency exposes two lock-step Class Representative seats —
+// one Boy CR and one Girl CR — so a class votes for one boy and one girl rep.
+const CR_POSITION_SEATS = [
+  { name: 'Class Representative (Boys)', gender: 'Male' },
+  { name: 'Class Representative (Girls)', gender: 'Female' },
+];
 
 class ConstituencyService {
   /**
    * Build the human-readable constituency label.
    */
   buildName({ department, year, section }) {
-    return `${department} ${year} Section ${section}`.trim();
+    const sec = String(section || '').trim();
+    return sec ? `${department} ${year} Section ${sec}`.trim() : `${department} ${year}`.trim();
   }
 
   /**
@@ -73,7 +79,8 @@ class ConstituencyService {
    * Create a constituency and auto-create its Class Representative position.
    */
   async create({ electionId, department, year, section, name }) {
-    if (!electionId || !department || !year || !section) {
+    // section may be "" for section-less courses (MCA, MBA, BCom).
+    if (!electionId || !department || !year || section === undefined || section === null) {
       const error = new Error('election_id, department, year, section are required.');
       error.code = 'VALIDATION';
       error.status = 400;
@@ -99,13 +106,16 @@ class ConstituencyService {
 
       constituency = result.rows[0];
 
-      // Auto-create the locked CR position for this constituency. Guard the
-      // insert so creating twice (race) never creates duplicate positions.
-      await client.query(
-        `INSERT INTO positions (constituency_id, name, description, display_order, max_selections)
-         VALUES ($1, $2, $3, 0, 1)`,
-        [constituency.id, CR_POSITION_NAME, null]
-      );
+      // Auto-create the two gender-scoped Class Representative seats (Boy CR +
+      // Girl CR) as locked single-seat positions. Both inserts live inside the
+      // same transaction so a failed create never leaves a half-built seat set.
+      for (const [index, seat] of CR_POSITION_SEATS.entries()) {
+        await client.query(
+          `INSERT INTO positions (constituency_id, name, description, display_order, max_selections, gender)
+           VALUES ($1, $2, $3, $4, 1, $5)`,
+          [constituency.id, seat.name, null, index, seat.gender]
+        );
+      }
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');

@@ -100,13 +100,21 @@ class ConstituencyController {
           message: 'election_id is required.',
         });
       }
-      for (const field of ['department', 'year', 'section']) {
+      for (const field of ['department', 'year']) {
         if (!req.body[field] || String(req.body[field]).trim() === '') {
           return res.status(400).json({
             error: 'Validation Error',
             message: `${field} is required.`,
           });
         }
+      }
+      // section may be "" for section-less courses (MCA, MBA, BCom) — it must
+      // be present as a string, but empty is valid.
+      if (req.body.section === undefined || req.body.section === null || typeof req.body.section !== 'string') {
+        return res.status(400).json({
+          error: 'Validation Error',
+          message: 'section is required.',
+        });
       }
 
       const election = await electionService.findById(parseInt(election_id));
