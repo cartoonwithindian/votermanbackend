@@ -19,6 +19,9 @@ router.post('/', requireAdmin, csrfProtection, studentController.create.bind(stu
 // PATCH /api/v1/admin/students/:id - Update student (admin only)
 router.patch('/:id', requireAdmin, csrfProtection, studentController.update.bind(studentController));
 
+// PATCH /api/v1/admin/students/bulk-voting-eligible - Set voting eligibility for all students
+router.patch('/bulk-voting-eligible', requireAdmin, csrfProtection, studentController.bulkSetVotingEligible.bind(studentController));
+
 // PATCH /api/v1/admin/students/:id/status - Update student status (admin only)
 router.patch('/:id/status', requireAdmin, csrfProtection, studentController.updateStatus.bind(studentController));
 

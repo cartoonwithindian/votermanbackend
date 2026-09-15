@@ -349,6 +349,51 @@ class StudentController {
       next(err);
     }
   }
+
+  /**
+   * PATCH /api/v1/students/bulk-voting-eligible
+   * Set voting_eligible for all (or a filtered set of) students.
+   */
+  async bulkSetVotingEligible(req, res, next) {
+    try {
+      const { voting_eligible, role, is_active } = req.body;
+
+      if (typeof voting_eligible !== 'boolean') {
+        return res.status(400).json({
+          error: 'Validation Error',
+          message: 'voting_eligible must be a boolean',
+        });
+      }
+
+      const db = require('../db');
+      let query = 'UPDATE students SET voting_eligible = $1';
+      const params = [voting_eligible];
+      const conditions = [];
+
+      if (role && typeof role === 'string') {
+        conditions.push(`role = $${params.length + 1}`);
+        params.push(role);
+      }
+      if (typeof is_active === 'boolean') {
+        conditions.push(`is_active = $${params.length + 1}`);
+        params.push(is_active);
+      }
+      if (conditions.length > 0) {
+        query += ' WHERE ' + conditions.join(' AND ');
+      }
+
+      const result = await db.query(query, params);
+
+      res.json({
+        data: {
+          updated: result.rowCount,
+          voting_eligible,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 module.exports = new StudentController();
