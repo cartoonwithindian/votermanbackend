@@ -172,49 +172,6 @@ router.post('/login', loginLimiter, csrfProtection, async (req, res) => {
       return authError(res, 400, 'INVALID_INPUT', 'Password is required.');
     }
 
-    // ---- Demo accounts (student / candidate portals) ----
-    // Auto-provisions student@gmail.com (STUDENT) and candidate@gmail.com
-    // (CANDIDATE) with password 1234 on first login, so both portals can be
-    // demoed instantly. Real accounts are unaffected.
-    const demoEmail = String(userIdentifier || '').trim().toLowerCase();
-    const DEMO_ACCOUNTS = {
-      'student@gmail.com': { role: 'STUDENT', name: 'Demo Student', externalId: 'STU-DEMO' },
-      'candidate@gmail.com': { role: 'CANDIDATE', name: 'Demo Candidate', externalId: 'CAND-DEMO' },
-    };
-    if (DEMO_ACCOUNTS[demoEmail] && password === '1234') {
-      try {
-        const demo = DEMO_ACCOUNTS[demoEmail];
-        const demoHash = await hashPassword('1234');
-        const existingDemo = await db.query(
-          'SELECT id FROM students WHERE LOWER(email) = $1 LIMIT 1',
-          [demoEmail]
-        ).then(r => r.rows[0]);
-        if (!existingDemo) {
-          await db.query(
-            `INSERT INTO students (external_id, name, email, password_hash, role, is_active, username,
-                                   password_change_required, roll_number, department, year_or_semester, section)
-             VALUES ($1, $2, $3, $4, $5, TRUE, $6, FALSE, $7, $8, $9, $10)
-             ON CONFLICT DO NOTHING`,
-            [demo.externalId, demo.name, demoEmail, demoHash, demo.role,
-             demoEmail.split('@')[0], 'DEMO-001', 'BCA', '2nd Year', 'A1']
-          );
-        } else {
-          // Keep the demo credentials usable even if the row pre-existed.
-          await db.query(
-            `UPDATE students
-                SET password_hash = $1, role = $2, is_active = TRUE,
-                    password_change_required = FALSE, locked_until = NULL,
-                    failed_login_attempts = 0,
-                    roll_number = COALESCE(roll_number, $3)
-              WHERE LOWER(email) = $4`,
-            [demoHash, demo.role, 'DEMO-001', demoEmail]
-          );
-        }
-      } catch (demoErr) {
-        console.error('Demo account provision error:', demoErr.message);
-      }
-    }
-
     // Validate role. When omitted, the account's actual DB role is used
     // (the main portal lets any role sign in; dashboards route by DB role).
     const validRoles = ['STUDENT', 'CANDIDATE', 'ADMIN', 'CAD'];
