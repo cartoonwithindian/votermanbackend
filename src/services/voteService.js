@@ -158,25 +158,62 @@ class VoteService {
     }
 
     // Step 5: Check authorization
-    const authCheck = await db.query(
-      `SELECT id, club_id, is_authorized, expires_at
-       FROM voter_authorizations
-       WHERE student_id = $1 AND election_id = $2 AND is_authorized = true`,
-      [parsedStudentId, parsedElectionId]
-    );
+    let authRows = (
+      await db.query(
+        `SELECT id, club_id, is_authorized, expires_at
+         FROM voter_authorizations
+         WHERE student_id = $1 AND election_id = $2 AND is_authorized = true`,
+        [parsedStudentId, parsedElectionId]
+      )
+    ).rows;
 
-    if (authCheck.rows.length === 0) {
-      return {
-        success: false,
-        error: 'Student is not authorized for this election',
-        code: 'NOT_AUTHORIZED',
-        status: 403
-      };
+    if (authRows.length === 0) {
+      // No explicit grant yet: students the admin marked voting-eligible
+      // earn their election-wide grant automatically on first vote attempt
+      // (this is what the admin's eligibility toggle controls). Anyone
+      // else still gets NOT_AUTHORIZED.
+      const elig = await db.query(
+        'SELECT id FROM students WHERE id = $1 AND is_active = TRUE AND voting_eligible = TRUE',
+        [parsedStudentId]
+      );
+      if (elig.rows.length === 0) {
+        return {
+          success: false,
+          error: 'Student is not authorized for this election',
+          code: 'NOT_AUTHORIZED',
+          status: 403
+        };
+      }
+      await db.query(
+        `INSERT INTO voter_authorizations (student_id, election_id, club_id, is_authorized)
+         SELECT $1, $2, NULL, TRUE
+         WHERE NOT EXISTS (
+           SELECT 1 FROM voter_authorizations
+           WHERE student_id = $1 AND election_id = $2 AND club_id IS NULL
+         )`,
+        [parsedStudentId, parsedElectionId]
+      );
+      authRows = (
+        await db.query(
+          `SELECT id, club_id, is_authorized, expires_at
+           FROM voter_authorizations
+           WHERE student_id = $1 AND election_id = $2 AND is_authorized = true`,
+          [parsedStudentId, parsedElectionId]
+        )
+      ).rows;
+      if (authRows.length === 0) {
+        return {
+          success: false,
+          error: 'Student is not authorized for this election',
+          code: 'NOT_AUTHORIZED',
+          status: 403
+        };
+      }
     }
 
     // The voter must hold an election-wide authorization (club_id IS NULL) to
     // vote on CR positions; a club-scoped authorization never covers CR seats.
-    const authorizations = authCheck.rows;
+    const authorizations = authRows;
     let authorization;
     if (isConstituencyPosition) {
       authorization = authorizations.find(row => row.club_id === null) || null;
