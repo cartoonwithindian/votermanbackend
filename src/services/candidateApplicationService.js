@@ -933,6 +933,7 @@ class CandidateApplicationService {
         ca.section,
         ca.position_id,
         ca.category,
+        ca.profile_photo_url AS photo,
         p.name AS position_name,
         ca.status
       FROM candidate_applications ca
