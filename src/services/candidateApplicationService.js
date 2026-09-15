@@ -276,7 +276,11 @@ class CandidateApplicationService {
 
     // Resolve the CR election + constituency + position up-front so the
     // update can set all of the ballot data authoritatively.
+    // If no matching election/constituency exists, still approve the
+    // application — just skip ballot placement. The admin can assign
+    // them to a ballot later.
     let crElectionId = null;
+    let crResolved = false;
     if (isCR) {
       let constituencyId = context.constituencyId ? parseInt(context.constituencyId) : null;
       let electionId = context.electionId ? parseInt(context.electionId) : null;
@@ -331,16 +335,8 @@ class CandidateApplicationService {
               break;
             }
           }
-          if (!electionId) {
-            const error = new Error(
-              'For Class Representative applications an election is required. No active election with a matching constituency was found.'
-            );
-            error.code = 'ELECTION_REQUIRED';
-            error.status = 400;
-            throw error;
-          }
         }
-        if (!constituencyId) {
+        if (electionId && !constituencyId) {
           const constituency = await constituencyService.findMatching({
             electionId,
             department: app.department,
@@ -348,31 +344,33 @@ class CandidateApplicationService {
             section: app.section,
             activeOnly: true,
           });
-          if (!constituency) {
-            const error = new Error(
-              'No matching Class Representative constituency exists for this applicant in the selected election.'
-            );
-            error.code = 'CONSTITUENCY_NOT_FOUND';
-            error.status = 404;
-            throw error;
+          if (constituency) {
+            constituencyId = constituency.id;
           }
-          constituencyId = constituency.id;
         }
       }
 
-      // CR position for the constituency (auto-created with the constituency).
-      const positions = await positionService.findByConstituencyId(constituencyId);
-      const crPosition = positions.find(p => p.constituency_id === constituencyId);
-      if (!crPosition) {
-        const error = new Error('No Class Representative position exists for this constituency.');
-        error.code = 'CONSTITUENCY_POSITION_MISSING';
-        error.status = 409;
-        throw error;
-      }
+      // Only place on ballot if we successfully resolved everything.
+      if (constituencyId && electionId) {
+        const positions = await positionService.findByConstituencyId(constituencyId);
+        const crPosition = positions.find(p => p.constituency_id === constituencyId);
+        if (!crPosition) {
+          const error = new Error('No Class Representative position exists for this constituency.');
+          error.code = 'CONSTITUENCY_POSITION_MISSING';
+          error.status = 409;
+          throw error;
+        }
 
-      crElectionId = electionId;
-      context._constituencyId = constituencyId;
-      context._positionId = crPosition.id;
+        crElectionId = electionId;
+        context._constituencyId = constituencyId;
+        context._positionId = crPosition.id;
+        crResolved = true;
+      } else {
+        console.warn(
+          'approve: CR application approved without ballot placement — no matching election/constituency found',
+          { applicationId: id, department: app.department, year: app.year, section: app.section }
+        );
+      }
     }
 
     const result = await db.query(
