@@ -6,6 +6,7 @@
 const db = require('../db');
 const candidateService = require('./candidateService');
 const constituencyService = require('./constituencyService');
+const electionService = require('./electionService');
 const positionService = require('./positionService');
 
 class CandidateApplicationService {
@@ -313,29 +314,50 @@ class CandidateApplicationService {
         // the supplied (or application's) election.
         electionId = electionId || app.electionId;
         if (!electionId) {
-          const error = new Error(
-            'For Class Representative applications an election is required.'
-          );
-          error.code = 'ELECTION_REQUIRED';
-          error.status = 400;
-          throw error;
+          // Auto-resolve: find the latest non-draft election with an active
+          // constituency matching this applicant's identity.
+          const elections = await electionService.findAll({ excludeDraft: true, limit: 10 });
+          for (const el of elections) {
+            const constituency = await constituencyService.findMatching({
+              electionId: el.id,
+              department: app.department,
+              year: app.year,
+              section: app.section,
+              activeOnly: true,
+            });
+            if (constituency) {
+              electionId = el.id;
+              constituencyId = constituency.id;
+              break;
+            }
+          }
+          if (!electionId) {
+            const error = new Error(
+              'For Class Representative applications an election is required. No active election with a matching constituency was found.'
+            );
+            error.code = 'ELECTION_REQUIRED';
+            error.status = 400;
+            throw error;
+          }
         }
-        const constituency = await constituencyService.findMatching({
-          electionId,
-          department: app.department,
-          year: app.year,
-          section: app.section,
-          activeOnly: true,
-        });
-        if (!constituency) {
-          const error = new Error(
-            'No matching Class Representative constituency exists for this applicant in the selected election.'
-          );
-          error.code = 'CONSTITUENCY_NOT_FOUND';
-          error.status = 404;
-          throw error;
+        if (!constituencyId) {
+          const constituency = await constituencyService.findMatching({
+            electionId,
+            department: app.department,
+            year: app.year,
+            section: app.section,
+            activeOnly: true,
+          });
+          if (!constituency) {
+            const error = new Error(
+              'No matching Class Representative constituency exists for this applicant in the selected election.'
+            );
+            error.code = 'CONSTITUENCY_NOT_FOUND';
+            error.status = 404;
+            throw error;
+          }
+          constituencyId = constituency.id;
         }
-        constituencyId = constituency.id;
       }
 
       // CR position for the constituency (auto-created with the constituency).
