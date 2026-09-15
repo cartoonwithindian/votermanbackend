@@ -39,4 +39,7 @@ router.patch('/:id/reject', requireAuth, requireAdmin, csrfProtection, candidate
 // PATCH /api/admin/candidates/:id/request-changes - Request changes
 router.patch('/:id/request-changes', requireAuth, requireAdmin, csrfProtection, candidateAppController.requestChanges.bind(candidateAppController));
 
+// GET /api/admin/candidates/approved - Get all approved candidates for admin position management
+router.get('/approved', requireAuth, requireAdmin, candidateAppController.listApproved.bind(candidateAppController));
+
 module.exports = router;

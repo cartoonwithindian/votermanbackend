@@ -405,6 +405,29 @@ class CandidateApplicationController {
       next(error);
     }
   }
+
+  /**
+   * GET /api/admin/candidates/approved - List all approved candidates
+   * For admin position management with class/section/CR filtering
+   */
+  async listApproved(req, res, next) {
+    try {
+      const { position_id, department, section } = req.query;
+
+      const candidates = await candidateAppService.findApprovedForAdmin({
+        positionId: position_id ? parseInt(position_id) : undefined,
+        department,
+        section,
+      });
+
+      return res.json({
+        data: candidates,
+        meta: { count: candidates.length },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new CandidateApplicationController();

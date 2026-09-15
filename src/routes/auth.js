@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Authentication Routes
  * Handles login, logout, MFA, OTP, and password management
  * Supports role-aware authentication for STUDENT, CANDIDATE, and ADMIN
@@ -41,7 +41,7 @@ router.get('/csrf', (req, res) => {
 });
 
 // =====================================================
-// DEBUG: Check Brevo email status (booleans only — never expose the API key
+// DEBUG: Check Brevo email status (booleans only â€” never expose the API key
 // prefix or sender address to unauthenticated callers).
 // =====================================================
 router.get('/debug/brevo-status', (req, res) => {
@@ -114,7 +114,7 @@ router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, re
       return authError(res, 400, 'INVALID_SECTION', 'Please enter a valid section (letters/numbers, up to 10 characters).');
     }
 
-    // Roll number IS the student identity — must be unique.
+    // Roll number IS the student identity â€” must be unique.
     const dupRoll = await db.query(
       'SELECT id FROM students WHERE LOWER(roll_number) = LOWER($1) AND id != $2 LIMIT 1',
       [roll, req.user.studentId]
@@ -172,6 +172,8 @@ router.post('/login', loginLimiter, csrfProtection, async (req, res) => {
       return authError(res, 400, 'INVALID_INPUT', 'Password is required.');
     }
 
+
+
     // Validate role. When omitted, the account's actual DB role is used
     // (the main portal lets any role sign in; dashboards route by DB role).
     const validRoles = ['STUDENT', 'CANDIDATE', 'ADMIN', 'CAD'];
@@ -183,7 +185,7 @@ router.post('/login', loginLimiter, csrfProtection, async (req, res) => {
     // Find account by identifier
     const account = await findStudentByIdentifierOrEmail(userIdentifier.trim());
 
-    // Check if account exists — unknown emails get an explicit "no account
+    // Check if account exists â€” unknown emails get an explicit "no account
     // found" (404 + needsRegistration) so first-time users are told to
     // register. Wrong passwords still get a generic 401 below.
     if (!account) {
@@ -199,7 +201,7 @@ router.post('/login', loginLimiter, csrfProtection, async (req, res) => {
     }
 
     // ENFORCE ROLE SEPARATION - Critical security check
-    // When role is omitted (main portal), any DB role is accepted — the
+    // When role is omitted (main portal), any DB role is accepted â€” the
     // frontend routes to the dashboard matching the returned DB role.
     if (requestedRole && account.role !== requestedRole) {
       incFailedLogin();
@@ -453,7 +455,7 @@ router.post('/otp/send-login', otpLimiter, csrfProtection, async (req, res) => {
       // against the account's actual role so verification logs the user in
       // with their real role (frontend routes by the returned user.role).
       // Previously a role mismatch returned a fake "code sent" success without
-      // creating an OTP — trapping the user in a verify-expired loop.
+      // creating an OTP â€” trapping the user in a verify-expired loop.
       const effectiveLoginRole = account.role || requestedRole;
 
       // Valid account - create OTP
@@ -604,7 +606,7 @@ router.post('/otp/verify-login', otpLimiter, csrfProtection, async (req, res) =>
       return authError(res, 400, 'INVALID_OTP', 'Invalid verification code.');
     }
 
-    // Log in with the ACCOUNT's actual role — the portal picker is advisory
+    // Log in with the ACCOUNT's actual role â€” the portal picker is advisory
     // only. The frontend routes by the returned user.role, so a candidate who
     // used the student portal still lands on the candidate dashboard.
     const actualRole = accountData.role || requestedRole;
@@ -825,7 +827,7 @@ router.post('/otp/verify-reset', passwordResetLimiter, csrfProtection, async (re
       return authError(res, 400, 'INVALID_OTP', 'Invalid reset code.');
     }
 
-    // The challenge carries the email + role, but no student_id — derive the
+    // The challenge carries the email + role, but no student_id â€” derive the
     // student account from the verified email.
     const account = await db.query(
       `SELECT id, role FROM students
@@ -1824,23 +1826,23 @@ router.post('/register/instant', registerLimiter, csrfProtection, async (req, re
 });
 
 // =====================================================
-// CLERK-PROOF REGISTRATION (email → OTP code → name + roll number)
+// CLERK-PROOF REGISTRATION (email â†’ OTP code â†’ name + roll number)
 //
 // The frontend collects the email, completes a Clerk email-code challenge
 // (Clerk sends the OTP email), then calls this endpoint with the Clerk
 // session token as a Bearer token to prove email ownership. We resolve the
-// email server-side, create the account (no password — sign-in is always via
+// email server-side, create the account (no password â€” sign-in is always via
 // a one-time code) with name + roll number, and return a backend session
 // (cv_sid cookie).
 //
 // Roles: registration creates a STUDENT account used to apply as a
 // candidate (CANDIDATE is earned when an admin approves the application).
 // STUDENT-portal registration is gated by the frontend for now; only the
-// candidate registration is open. ADMIN is NEVER created here — admins are
+// candidate registration is open. ADMIN is NEVER created here â€” admins are
 // provisioned via ADMIN_EMAILS.
 // =====================================================
 // =====================================================
-// CLERK-PROOF REGISTRATION (OTP email code → verified Clerk token)
+// CLERK-PROOF REGISTRATION (OTP email code â†’ verified Clerk token)
 //
 // Authenticates exclusively with Authorization: Bearer <Clerk JWT>
 // (verified against Clerk's JWKS in clerkVerify.js). Browsers never attach
@@ -1905,7 +1907,7 @@ router.post('/register/clerk', registerLimiter, requireClerkMiddleware, async (r
     if (!name || name.length < 2 || name.length > 255) {
       return authError(res, 400, 'INVALID_NAME', 'Please enter your full name (2-255 characters).');
     }
-    // Registration name IS the account name — it pre-fills the candidate
+    // Registration name IS the account name â€” it pre-fills the candidate
     // application form and shows on dashboards/profile.
 
     // ---- Password (required; used for email + password sign-in) ----
@@ -1928,7 +1930,7 @@ router.post('/register/clerk', registerLimiter, requireClerkMiddleware, async (r
     const passwordHash = await hashPassword(password);
     let account;
 
-    // Duplicate roll number → the roll number IS the student identity.
+    // Duplicate roll number â†’ the roll number IS the student identity.
     if (roll) {
       const dupRoll = await db.query(
         'SELECT id FROM students WHERE LOWER(roll_number) = LOWER($1) LIMIT 1',
@@ -1972,7 +1974,7 @@ router.post('/register/clerk', registerLimiter, requireClerkMiddleware, async (r
 });
 
 // =====================================================
-// CLERK-PROOF EMAIL RECOVERY (email → OTP code → session)
+// CLERK-PROOF EMAIL RECOVERY (email â†’ OTP code â†’ session)
 //
 // Same email-ownership proof as registration, for accounts that already
 // exist. Accounts have no password in the OTP flow, so there is nothing to

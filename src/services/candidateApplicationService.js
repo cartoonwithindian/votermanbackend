@@ -693,6 +693,63 @@ class CandidateApplicationService {
       updatedAt: row.updated_at,
     };
   }
+
+  /**
+   * Find all approved candidates for admin position management.
+   * Used by admin Positions page to show candidates with class/section details.
+   *
+   * @param {Object} options
+   * @param {number} options.positionId - Filter by position ID
+   * @param {string} options.department - Filter by department
+   * @param {string} options.section - Filter by section
+   */
+  async findApprovedForAdmin(options = {}) {
+    const { positionId, department, section } = options;
+
+    let query = `
+      SELECT
+        ca.id,
+        ca.student_id,
+        ca.full_name,
+        ca.gender,
+        ca.department,
+        ca.year,
+        ca.section,
+        ca.position_id,
+        p.name AS position_name,
+        ca.status,
+        ca.is_active
+      FROM candidate_applications ca
+      JOIN positions p ON ca.position_id = p.id
+      WHERE ca.status = 'approved'
+    `;
+
+    const params = [];
+    let paramIndex = 1;
+
+    if (positionId) {
+      query += ` AND ca.position_id = $${paramIndex}`;
+      params.push(positionId);
+      paramIndex++;
+    }
+
+    if (department && department !== 'all') {
+      query += ` AND ca.department = $${paramIndex}`;
+      params.push(department);
+      paramIndex++;
+    }
+
+    if (section && section !== 'all') {
+      query += ` AND ca.section = $${paramIndex}`;
+      params.push(section);
+      paramIndex++;
+    }
+
+    query += ' ORDER BY ca.department, ca.year, ca.section, ca.full_name';
+
+    const result = await db.query(query, params);
+    return result.rows;
+  }
 }
 
 module.exports = new CandidateApplicationService();

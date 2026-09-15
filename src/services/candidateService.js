@@ -1,13 +1,181 @@
 /**
  * Candidate Service
- * Business logic for candidate management
+ * Business logic for candidate management.
+ *
+ * Two data sources:
+ * 1. candidates table - legacy club election candidates (internal)
+ * 2. candidate_applications table with status='approved' - CR/public candidates
+ *
+ * The public /api/v1/candidates endpoint uses source 2 (approved applications).
  */
 
 const db = require('../db');
 
 class CandidateService {
   /**
-   * Find all candidates (no position filter)
+   * Find all APPROVED candidates for public/student view.
+   * Uses candidate_applications with status='approved'.
+   *
+   * @param {Object} options
+   * @param {boolean} options.activeOnly - Filter by is_active (default: true)
+   * @param {number} options.limit - Result limit
+   * @param {number} options.offset - Result offset
+   * @param {string} options.gender - Filter by gender (Male, Female, Other)
+   * @param {string} options.department - Filter by department
+   * @param {string} options.year - Filter by year
+   * @param {string} options.section - Filter by section
+   */
+  async findApproved(options = {}) {
+    const {
+      activeOnly = true,
+      limit = 100,
+      offset = 0,
+      gender,
+      department,
+      year,
+      section,
+    } = options;
+
+    // Query approved applications with position information
+    let query = `
+      SELECT
+        ca.id,
+        ca.student_id,
+        ca.full_name AS name,
+        ca.gender,
+        ca.department,
+        ca.year,
+        ca.section,
+        ca.bio AS description,
+        ca.profile_photo_url AS image_url,
+        ca.is_active,
+        p.id AS position_id,
+        p.name AS position_name,
+        e.id AS election_id,
+        e.name AS election_name
+      FROM candidate_applications ca
+      JOIN positions p ON ca.position_id = p.id
+      JOIN elections e ON ca.election_id = e.id
+      WHERE ca.status = 'approved'
+    `;
+
+    const params = [];
+    let paramIndex = 1;
+
+    if (activeOnly) {
+      query += ` AND ca.is_active = true`;
+    }
+
+    // Add filters
+    if (gender && gender !== 'all') {
+      query += ` AND ca.gender = $${paramIndex}`;
+      params.push(gender);
+      paramIndex++;
+    }
+
+    if (department && department !== 'all') {
+      query += ` AND ca.department = $${paramIndex}`;
+      params.push(department);
+      paramIndex++;
+    }
+
+    if (year && year !== 'all') {
+      query += ` AND ca.year = $${paramIndex}`;
+      params.push(year);
+      paramIndex++;
+    }
+
+    if (section && section !== 'all') {
+      query += ` AND ca.section = $${paramIndex}`;
+      params.push(section);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY ca.id LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(limit, offset);
+
+    const result = await db.query(query, params);
+    return result.rows;
+  }
+
+  /**
+   * Find a single approved candidate by ID for public view.
+   */
+  async findApprovedById(id) {
+    const result = await db.query(`
+      SELECT
+        ca.id,
+        ca.student_id,
+        ca.full_name AS name,
+        ca.gender,
+        ca.department,
+        ca.year,
+        ca.section,
+        ca.bio AS description,
+        ca.profile_photo_url AS image_url,
+        ca.is_active,
+        p.id AS position_id,
+        p.name AS position_name,
+        e.id AS election_id,
+        e.name AS election_name
+      FROM candidate_applications ca
+      JOIN positions p ON ca.position_id = p.id
+      JOIN elections e ON ca.election_id = e.id
+      WHERE ca.id = $1 AND ca.status = 'approved'
+    `, [id]);
+
+    return result.rows[0] || null;
+  }
+
+  /**
+   * Count approved candidates with optional filters.
+   */
+  async countApproved(options = {}) {
+    const { gender, department, year, section } = options;
+
+    let query = `
+      SELECT COUNT(*) as count
+      FROM candidate_applications
+      WHERE status = 'approved' AND is_active = true
+    `;
+
+    const params = [];
+    let paramIndex = 1;
+
+    if (gender && gender !== 'all') {
+      query += ` AND gender = $${paramIndex}`;
+      params.push(gender);
+      paramIndex++;
+    }
+
+    if (department && department !== 'all') {
+      query += ` AND department = $${paramIndex}`;
+      params.push(department);
+      paramIndex++;
+    }
+
+    if (year && year !== 'all') {
+      query += ` AND year = $${paramIndex}`;
+      params.push(year);
+      paramIndex++;
+    }
+
+    if (section && section !== 'all') {
+      query += ` AND section = $${paramIndex}`;
+      params.push(section);
+      paramIndex++;
+    }
+
+    const result = await db.query(query, params);
+    return parseInt(result.rows[0].count) || 0;
+  }
+
+  // =============================================
+  // LEGACY METHODS (for club elections internal use)
+  // =============================================
+
+  /**
+   * Find all candidates (legacy - club elections)
    */
   async findAll(options = {}) {
     const { activeOnly = true, limit = 100, offset = 0 } = options;
@@ -53,26 +221,7 @@ class CandidateService {
   }
 
   /**
-   * Find candidate by ID with full hierarchy
-   */
-  async findById(id) {
-    const result = await db.query(
-      `SELECT c.*,
-              p.name as position_name, p.club_id,
-              cl.name as club_name, cl.election_id,
-              e.name as election_name, e.status as election_status
-       FROM candidates c
-       JOIN positions p ON c.position_id = p.id
-       JOIN clubs cl ON p.club_id = cl.id
-       JOIN elections e ON cl.election_id = e.id
-       WHERE c.id = $1`,
-      [id]
-    );
-    return result.rows[0] || null;
-  }
-
-  /**
-   * Find candidate by ID (simple)
+   * Find candidate by ID (legacy)
    */
   async findByIdSimple(id) {
     const result = await db.query(
@@ -83,76 +232,24 @@ class CandidateService {
   }
 
   /**
-   * Create a new candidate
+   * Find single candidate by ID
    */
-  async create(data) {
-    const { position_id, name, description, image_url, display_order } = data;
+  async findById(id) {
+    const result = await db.query(`
+      SELECT c.*,
+             p.name AS position_name,
+             p.id AS position_id,
+             cl.name AS club_name,
+             e.id AS election_id,
+             e.name AS election_name
+      FROM candidates c
+      JOIN positions p ON c.position_id = p.id
+      JOIN clubs cl ON p.club_id = cl.id
+      JOIN elections e ON cl.election_id = e.id
+      WHERE c.id = $1
+    `, [id]);
 
-    const result = await db.query(
-      `INSERT INTO candidates (position_id, name, description, image_url, display_order)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [
-        position_id,
-        name.trim(),
-        description?.trim() || null,
-        image_url?.trim() || null,
-        display_order !== undefined ? display_order : 0,
-      ]
-    );
-
-    return result.rows[0];
-  }
-
-  /**
-   * Update a candidate (only allowed fields)
-   */
-  async update(id, data) {
-    const candidate = await this.findByIdSimple(id);
-    if (!candidate) return null;
-
-    const updates = [];
-    const params = [];
-    let paramIndex = 1;
-
-    // Allowed fields for update
-    const allowedFields = ['name', 'description', 'image_url', 'display_order'];
-
-    for (const field of allowedFields) {
-      if (data[field] !== undefined) {
-        updates.push(`${field} = $${paramIndex}`);
-        if (field === 'name') {
-          params.push(data[field].trim());
-        } else if (field === 'description' || field === 'image_url') {
-          params.push(data[field]?.trim() || null);
-        } else {
-          params.push(data[field]);
-        }
-        paramIndex++;
-      }
-    }
-
-    if (updates.length === 0) {
-      return candidate;
-    }
-
-    updates.push(`updated_at = NOW()`);
-    params.push(id);
-
-    const query = `UPDATE candidates SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
-    const result = await db.query(query, params);
-    return result.rows[0];
-  }
-
-  /**
-   * Check if position exists
-   */
-  async positionExists(positionId) {
-    const result = await db.query(
-      'SELECT id FROM positions WHERE id = $1',
-      [positionId]
-    );
-    return result.rows.length > 0;
+    return result.rows[0] || null;
   }
 
   /**
@@ -186,6 +283,26 @@ class CandidateService {
   async canCreate(positionId) {
     const status = await this.getElectionStatusByPositionId(positionId);
     return status === 'DRAFT' || status === 'SCHEDULED';
+  }
+
+  /**
+   * Update candidate (legacy)
+   */
+  async update(id, data) {
+    const { name, description, image_url, display_order } = data;
+
+    const result = await db.query(`
+      UPDATE candidates
+      SET name = COALESCE($2, name),
+          description = COALESCE($3, description),
+          image_url = COALESCE($4, image_url),
+          display_order = COALESCE($5, display_order),
+          updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [id, name, description, image_url, display_order]);
+
+    return result.rows[0];
   }
 }
 
