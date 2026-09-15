@@ -9,6 +9,7 @@
  */
 
 const constituencyService = require('../services/constituencyService');
+const candidateAppService = require('../services/candidateApplicationService');
 const electionService = require('../services/electionService');
 const positionService = require('../services/positionService');
 
@@ -140,7 +141,18 @@ class ConstituencyController {
         name,
       });
 
-      res.status(201).json({ data: constituency });
+      // A new seat makes previously-approved candidates ballot-ready:
+      // auto-place any approved-but-unplaced applications of this class.
+      // Best-effort — never fails the creation.
+      let autoPlaced = [];
+      try {
+        const outcome = await candidateAppService.placeUnplacedForElection(parseInt(election_id));
+        autoPlaced = outcome.placed;
+      } catch (err) {
+        console.warn('create constituency: auto ballot placement failed', { electionId: election_id, code: err.code || err.message });
+      }
+
+      res.status(201).json({ data: constituency, meta: { autoPlaced } });
     } catch (err) {
       if (err.code === '23505') {
         return res.status(409).json({
