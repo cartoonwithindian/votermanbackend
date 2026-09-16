@@ -56,9 +56,9 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
       return authError(res, 400, 'NO_EMAIL', 'Google account has no verified email address.');
     }
 
-    // ---- 3.5 Invite-only gate + admin bootstrap ----
-    const allowList = String(process.env.INVITED_EMAILS || '')
-      .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+    // ---- 3.5 Role bootstrap lists ----
+    // Open registration: any Google account may sign in and is provisioned
+    // as STUDENT (CANDIDATE is earned on application approval).
     const adminList = String(process.env.ADMIN_EMAILS || '')
       .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
     const cadList = String(process.env.CAD_EMAILS || '')
@@ -82,17 +82,7 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
     ).then((r) => r.rows[0]);
 
     if (!account) {
-      // ---- Invite-only mode: unknown emails are rejected outright ----
-      if (process.env.INVITE_ONLY === 'true' && !allowList.includes(email)) {
-        await recordAudit('clerk_login_denied', {
-          studentId: null,
-          ip: req.ip,
-          metadata: { email, clerkUserId, reason: 'not_invited' },
-        });
-        return authError(res, 403, 'NOT_INVITED', 'This Google account has not been invited to CampusVote. Ask the election administrator for access.');
-      }
-
-      // ---- Auto-provision invited users only ----
+      // ---- Auto-provision every new Google account as STUDENT ----
       const name = String(req.body.name || '').trim() || email.split('@')[0];
       const usernameBase = email.split('@')[0].replace(/[^a-z0-9._-]/gi, '').toLowerCase() || 'user';
       const username = `${usernameBase}.${randomBytes(3).toString('hex')}`;
