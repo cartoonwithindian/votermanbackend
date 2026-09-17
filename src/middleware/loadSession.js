@@ -68,7 +68,7 @@ async function loadSession(req, res, next) {
     const result = await db.query(
       `SELECT s.*, st.external_id, st.name, st.email, st.role, st.is_active,
               st.password_change_required, st.mfa_enabled, st.mfa_secret_encrypted,
-              st.password_hash, st.roll_number, st.department,
+              st.password_hash, st.roll_number, st.mobile_number, st.department,
               st.year_or_semester, st.section
          FROM sessions s
          JOIN students st ON st.id = s.student_id
@@ -119,6 +119,7 @@ async function loadSession(req, res, next) {
       fullName: row.name,
       email: row.email,
       rollNumber: row.roll_number || null,
+      mobileNumber: row.mobile_number || null,
       department: row.department || null,
       year: row.year_or_semester || null,
       section: row.section || null,

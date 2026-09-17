@@ -76,10 +76,10 @@ const PROFILE_YEARS = ['1st Year', '2nd Year', '3rd Year'];
 
 router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, res) => {
   try {
-    const { rollNumber, department, year, section } = req.body;
+    const { rollNumber, mobileNumber, department, year, section } = req.body;
 
     const account = await db.query(
-      'SELECT id, roll_number FROM students WHERE id = $1',
+      'SELECT id, roll_number, mobile_number FROM students WHERE id = $1',
       [req.user.studentId]
     ).then((r) => r.rows[0]);
 
@@ -87,15 +87,10 @@ router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, re
       return authError(res, 404, 'ACCOUNT_NOT_FOUND', 'Account not found.');
     }
 
-    // One-time step: once a roll number is stored the profile is locked.
-    // Corrections go through the administrator / support flow.
-    if (account.roll_number) {
+    // One-time step: once a roll number OR mobile number is stored the profile
+    // is locked. Corrections go through the administrator / support flow.
+    if (account.roll_number || account.mobile_number) {
       return authError(res, 403, 'PROFILE_LOCKED', 'Your profile is already completed. Contact the administrator to change it.');
-    }
-
-    const roll = String(rollNumber || '').trim();
-    if (roll.length < 3 || roll.length > 64) {
-      return authError(res, 400, 'INVALID_ROLL', 'Please enter a valid roll / enrollment number (3-64 characters).');
     }
 
     const courseInput = String(department || '').trim();
@@ -114,22 +109,55 @@ router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, re
       return authError(res, 400, 'INVALID_SECTION', 'Please enter a valid section (letters/numbers, up to 10 characters).');
     }
 
-    // Roll number IS the student identity â€” must be unique.
-    const dupRoll = await db.query(
-      'SELECT id FROM students WHERE LOWER(roll_number) = LOWER($1) AND id != $2 LIMIT 1',
-      [roll, req.user.studentId]
-    ).then((r) => r.rows[0]);
-    if (dupRoll) {
-      return authError(res, 409, 'ROLL_EXISTS', 'This roll number is already registered. If it is yours, sign in with that account or contact the administrator.');
+    // Identity is year-dependent:
+    // - 1st Year students give a mobile number (a roll number may not exist yet).
+    // - 2nd/3rd Year students give a roll / enrollment number.
+    const phone = String(mobileNumber || '').replace(/[\s()-]/g, '');
+    const roll = String(rollNumber || '').trim();
+
+    if (yearValue === '1st Year') {
+      if (!phone || !/^\+?[0-9]{10,15}$/.test(phone)) {
+        return authError(res, 400, 'INVALID_PHONE', 'Please enter a valid phone number (10-15 digits).');
+      }
+    } else {
+      if (roll.length < 3 || roll.length > 64) {
+        return authError(res, 400, 'INVALID_ROLL', 'Please enter a valid roll / enrollment number (3-64 characters).');
+      }
     }
 
+    // Roll number is the student identity — must be unique when provided.
+    if (roll) {
+      const dupRoll = await db.query(
+        'SELECT id FROM students WHERE LOWER(roll_number) = LOWER($1) AND id != $2 LIMIT 1',
+        [roll, req.user.studentId]
+      ).then((r) => r.rows[0]);
+      if (dupRoll) {
+        return authError(res, 409, 'ROLL_EXISTS', 'This roll number is already registered. If it is yours, sign in with that account or contact the administrator.');
+      }
+    }
+
+    // Mobile number must be unique when provided.
+    if (phone) {
+      const dupPhone = await db.query(
+        'SELECT id FROM students WHERE mobile_number = $1 AND id != $2 LIMIT 1',
+        [phone, req.user.studentId]
+      ).then((r) => r.rows[0]);
+      if (dupPhone) {
+        return authError(res, 409, 'PHONE_EXISTS', 'This mobile number is already registered. If it is yours, sign in with that account or contact the administrator.');
+      }
+    }
+
+    // COALESCE(NULLIF(...)) preserves existing values so a 1st Year student
+    // never blanks a roll number and vice versa.
     const updated = await db.query(
       `UPDATE students
-          SET roll_number = $1, department = $2, year_or_semester = $3, section = $4,
+          SET roll_number = COALESCE(NULLIF($1, ''), roll_number),
+              mobile_number = COALESCE(NULLIF($2, ''), mobile_number),
+              department = $3, year_or_semester = $4, section = $5,
               updated_at = NOW()
-        WHERE id = $5
-        RETURNING roll_number, department, year_or_semester, section`,
-      [roll, course, yearValue, sectionValue, req.user.studentId]
+        WHERE id = $6
+        RETURNING roll_number, mobile_number, department, year_or_semester, section`,
+      [roll, phone, course, yearValue, sectionValue, req.user.studentId]
     ).then((r) => r.rows[0]);
 
     await recordAudit('profile_completed', {
@@ -142,7 +170,8 @@ router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, re
       data: {
         message: 'Profile completed successfully.',
         profile: {
-          rollNumber: updated.roll_number,
+          rollNumber: updated.roll_number || null,
+          mobileNumber: updated.mobile_number || null,
           department: updated.department,
           year: updated.year_or_semester,
           section: updated.section,
