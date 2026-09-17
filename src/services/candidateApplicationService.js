@@ -832,7 +832,7 @@ class CandidateApplicationService {
       `UPDATE candidate_applications
        SET bio = COALESCE($1, bio),
            manifesto = COALESCE($2, manifesto),
-           profile_photo_url = COALESCE($3, profile_photo_url),
+           profile_photo_url = CASE WHEN $3 = '' THEN NULL ELSE COALESCE($3, profile_photo_url) END,
            updated_at = NOW()
        WHERE id = $4
        RETURNING *`,

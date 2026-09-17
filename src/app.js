@@ -245,7 +245,10 @@ app.use('/api/v1/support', supportRoutes);
 app.use('/api/v1/uploads', uploadsRoutes);
 
 // Authenticated student's own profile (identity from session, never client-supplied)
+// GET returns profile including Appwrite avatar URL (bucket: candidate-photos folder: profiles/)
+// PATCH allows self-service name/phone/avatar update; avatar is an Appwrite Storage URL
 app.get('/api/v1/students/profile', requireAuth, studentController.profile.bind(studentController));
+app.patch('/api/v1/students/profile', requireAuth, studentController.updateProfile.bind(studentController));
 
 // =====================================================
 // ADMIN ROUTES (authentication + admin role required)
@@ -264,6 +267,7 @@ app.use('/api/v1/admin/announcements', requireAdmin, adminAnnouncements);
 app.use('/api/v1/admin/support', requireAdmin, adminSupport);
 app.use('/api/v1/admin/email-recovery', requireAdmin, adminEmailRecoveryRoutes);
 app.use('/api/v1/admin/access-requests', requireAdmin, adminAccessRequestRoutes);
+app.use('/api/v1/admin/backups', requireAdmin, require('./routes/adminBackups'));
 app.use('/api/v1/admin/stats', requireAdmin, adminStats.getStats);
 app.get('/api/v1/admin/live', requireAdmin, adminLiveResults.getLive);
 app.get('/api/v1/admin/audit-logs', requireAdmin, adminAuditLogs.list);

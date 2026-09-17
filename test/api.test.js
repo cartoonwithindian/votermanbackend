@@ -845,7 +845,9 @@ test('POST /api/v1/auth/profile rejects duplicate roll numbers', async () => {
   try {
     const c1 = await loginProfileClient(first.externalId);
     let res = await c1.request('POST', '/api/v1/auth/profile', {
-      body: { rollNumber: 'DUPL0001', department: 'MBA', year: '1st Year', section: 'C' },
+      // 2nd Year: roll number is the identity (1st Year would require a
+      // mobile number instead per the year-dependent profile rules).
+      body: { rollNumber: 'DUPL0001', department: 'MBA', year: '2nd Year', section: 'C' },
     });
     assert.equal(res.status, 200);
 

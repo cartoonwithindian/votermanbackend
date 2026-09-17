@@ -176,6 +176,55 @@ class StudentService {
 
     return sanitizeStudent(result.rows[0]) || null;
   }
+
+  /**
+   * Update student's profile image URL (Appwrite Storage)
+   * Used by POST /api/v1/uploads/profile — persists the public view URL
+   * from the "Profile Images & Candidate Photos" bucket (folder: profiles/).
+   */
+  async updateProfileImage(id, url) {
+    const result = await db.query(
+      `UPDATE students SET profile_image_url = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING *`,
+      [url, id]
+    );
+    return sanitizeStudent(result.rows[0]) || null;
+  }
+
+  /**
+   * Update own profile (student self-service) — name/phone/avatar
+   * Only allow safe fields; email/role/voting_eligible are admin-only.
+   */
+  async updateOwnProfile(id, data) {
+    const { name, phone, profile_image_url } = data;
+    const sets = [];
+    const values = [];
+    let idx = 1;
+    if (name !== undefined && name !== null && String(name).trim() !== '') {
+      sets.push(`name = $${idx++}`);
+      values.push(String(name).trim());
+    }
+    if (phone !== undefined) {
+      sets.push(`mobile_number = $${idx++}`);
+      values.push(phone ? String(phone).trim() : null);
+    }
+    if (profile_image_url !== undefined) {
+      sets.push(`profile_image_url = $${idx++}`);
+      values.push(profile_image_url ? String(profile_image_url).trim() : null);
+    }
+    if (sets.length === 0) {
+      const existing = await db.query('SELECT * FROM students WHERE id = $1', [id]);
+      return sanitizeStudent(existing.rows[0]) || null;
+    }
+    sets.push(`updated_at = NOW()`);
+    values.push(id);
+    const result = await db.query(
+      `UPDATE students SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`,
+      values
+    );
+    return sanitizeStudent(result.rows[0]) || null;
+  }
 }
 
 module.exports = new StudentService();

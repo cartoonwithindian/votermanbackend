@@ -37,6 +37,10 @@ async function startServer() {
     console.log(`Database health: http://localhost:${PORT}/api/health/db`);
   });
 
+  // Scheduled DB snapshot backups to Appwrite Storage (no-op when not
+  // configured). See src/services/backupScheduler.js.
+  require('./services/backupScheduler').start();
+
   // Graceful shutdown
   const shutdown = async () => {
     console.log('\nReceived shutdown signal...');

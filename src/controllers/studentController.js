@@ -97,7 +97,8 @@ class StudentController {
           year: student.year_or_semester || null,
           section: student.section || null,
           phone: student.mobile_number || null,
-          avatar: null,
+          avatar: student.profile_image_url || null,
+          profileImageUrl: student.profile_image_url || null,
           role: student.role,
           isActive: !!student.is_active,
           votingEligible: !!student.voting_eligible,
@@ -345,6 +346,55 @@ class StudentController {
       }
 
       res.json({ data: student });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/students/profile (self-service)
+   * Update own profile (name, phone, avatar). Wired to Appwrite "Profile Images" bucket.
+   */
+  async updateProfile(req, res, next) {
+    try {
+      const studentId = req.user?.studentId;
+      if (!studentId) {
+        return res.status(401).json({
+          error: 'Unauthorized',
+          message: 'Authentication required.',
+          code: 'AUTH_REQUIRED',
+        });
+      }
+      const { name, phone, avatar, profileImageUrl, profile_image_url } = req.body || {};
+      const avatarUrl = profileImageUrl || profile_image_url || avatar || undefined;
+      if (name !== undefined && typeof name === 'string' && name.trim() === '') {
+        return res.status(400).json({ error: 'Validation Error', message: 'name cannot be empty' });
+      }
+      const updated = await studentService.updateOwnProfile(studentId, {
+        name,
+        phone,
+        profile_image_url: avatarUrl,
+      });
+      if (!updated) {
+        return res.status(404).json({ error: 'Not Found', message: 'Student record not found.' });
+      }
+      res.json({
+        data: {
+          id: String(updated.id),
+          name: updated.name,
+          email: updated.email || updated.official_email || updated.current_login_email || null,
+          enrollmentNumber: updated.roll_number || updated.enrollment_number || null,
+          department: updated.department || null,
+          year: updated.year_or_semester || null,
+          section: updated.section || null,
+          phone: updated.mobile_number || null,
+          avatar: updated.profile_image_url || null,
+          profileImageUrl: updated.profile_image_url || null,
+          role: updated.role,
+          isActive: !!updated.is_active,
+          votingEligible: !!updated.voting_eligible,
+        },
+      });
     } catch (err) {
       next(err);
     }

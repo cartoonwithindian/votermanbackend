@@ -11,6 +11,7 @@
     "migrate:status": "node migrate.js status",
     "migrate:down": "node migrate.js down",
     "migrate:reset": "node migrate.js reset",
+    "db:restore": "node scripts/restore-backup.js",
     "seed": "node seed.js"
   },
   "keywords": [

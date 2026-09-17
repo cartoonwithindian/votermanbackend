@@ -30,6 +30,20 @@ services:
         sync: false
       - key: DB_SSL
         value: "true"
+      # --- Appwrite Education Pack (Profile Images & Candidate Photos) ---
+      # Same bucket "candidate-photos" (display: Profile Images & Candidate Photos)
+      # folders: candidates/ + profiles/, 5MB, zstd, antivirus, transformations
+      # Project: 6a961a3200335ef36ba8 (fra). Paste API key in Render dashboard (sync:false).
+      - key: APPWRITE_ENDPOINT
+        value: https://fra.cloud.appwrite.io/v1
+      - key: APPWRITE_PROJECT_ID
+        value: 6a961a3200335ef36ba8
+      - key: APPWRITE_API_KEY
+        sync: false
+      - key: APPWRITE_PHOTOS_BUCKET
+        value: candidate-photos
+      - key: APPWRITE_PROFILE_BUCKET
+        value: profile-images
     healthCheckPath: /api/health
     autoDeploy: true
  
