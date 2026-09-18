@@ -74,12 +74,12 @@ router.post('/', submitLimiter, async (req, res) => {
 // ---- GET /status ----
 router.get('/status', statusLimiter, async (req, res) => {
   try {
-    const { studentId, accessibleEmail } = req.query;
-    if (!studentId || !accessibleEmail) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Student ID and accessible email are both required.' } });
+    const { fullName, accessibleEmail } = req.query;
+    if (!fullName || !accessibleEmail) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Full name and current email are both required.' } });
     }
 
-    const row = await service.checkStatus(studentId, accessibleEmail);
+    const row = await service.checkStatus(fullName, accessibleEmail);
 
     // Uniform 404 when nothing matches (no request enumeration)
     if (!row) {
