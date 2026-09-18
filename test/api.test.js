@@ -12,6 +12,10 @@ process.env.DATABASE_URL =
   process.env.TEST_DATABASE_URL ||
   'postgres://voteweb:voteweb@localhost:5434/voteweb';
 
+// The submit rate limit (5/hr by default) would trip across the access-request
+// tests since they share one IP (127.0.0.1).
+process.env.ACCESS_REQ_SUBMIT_MAX = process.env.TEST_ACCESS_REQ_SUBMIT_MAX || '100';
+
 const app = require('../src/app');
 const db = require('../src/db');
 const announcementService = require('../src/services/announcementService');
@@ -941,5 +945,159 @@ test('POST /api/candidates/apply still requires a section for sectioned courses'
     await db.query('DELETE FROM candidate_applications WHERE student_id = $1', [id]);
     await db.query('DELETE FROM sessions WHERE student_id = $1', [id]);
     await db.query('DELETE FROM students WHERE id = $1', [id]);
+  }
+});
+
+// ============================================================
+// ACCESS REQUEST — email-change (old mail -> new mail) flow
+// ============================================================
+const accessRequestService = require('../src/services/accessRequestService');
+
+async function createWhitelistedStudent(prefix) {
+  const externalId = `${prefix}${randomId('')}`.slice(0, 18).toLowerCase();
+  const email = `${externalId}@oldmail.test.local`;
+  const inserted = await db.query(
+    `INSERT INTO students (external_id, name, email, role, password_hash,
+                           password_change_required, mfa_enabled, failed_login_attempts, is_active,
+                           student_id, official_email, current_login_email, email_verified,
+                           department, year_or_semester, section, voting_eligible)
+     VALUES ($1, 'Whitelisted Test Student', $2, 'STUDENT', $3, FALSE, FALSE, 0, TRUE,
+             $4, $2, $2, TRUE, 'BBA', '5 Sem', 'A1', TRUE)
+     RETURNING id`,
+    [externalId, email, await hashPassword(TEST_PW), `WHL-${externalId}`.slice(0, 64)]
+  );
+  return { id: inserted.rows[0].id, externalId, email };
+}
+
+function accessRequestPayload(overrides = {}) {
+  return {
+    collegeEmail: 'whl@oldmail.test.local',
+    accessibleEmail: `${randomId('')}@newmail.test.local`,
+    department: 'BBA',
+    yearOrSemester: '5 Sem',
+    section: 'A1',
+    rollNumber: '',
+    phone: '+91 98765 43210',
+    ...overrides,
+  };
+}
+
+test('access request: email-change submit -> status -> approve swaps login to new email', async () => {
+  const w = await createWhitelistedStudent('WHL');
+  const NEW_EMAIL = `${randomId('')}@newmail.test.local`;
+  const c = new TestClient(baseUrl);
+  try {
+    // 1. Submit with registered (old) email + NEW accessible email
+    let res = await c.request('POST', '/api/v1/access-requests', {
+      csrf: false,
+      binding: false,
+      body: accessRequestPayload({ collegeEmail: w.email, accessibleEmail: NEW_EMAIL }),
+    });
+    assert.equal(res.status, 201, JSON.stringify(res.json));
+    const requestId = res.json.data.requestId;
+
+    // 2. Whitelist match auto-fills name + student_id, stores section + phone
+    const row = await db.query(
+      'SELECT full_name, student_id, college_email, accessible_email, section, phone, status FROM student_access_requests WHERE id = $1',
+      [requestId]
+    );
+    assert.equal(row.rows[0].full_name, 'Whitelisted Test Student');
+    assert.equal(row.rows[0].student_id, w.externalId === w.email ? null : `WHL-${w.externalId}`.slice(0, 64));
+    assert.equal(row.rows[0].college_email, w.email);
+    assert.equal(row.rows[0].accessible_email, NEW_EMAIL);
+    assert.equal(row.rows[0].section, 'A1');
+    assert.equal(row.rows[0].phone, '+919876543210');
+    assert.equal(row.rows[0].status, 'pending');
+
+    // 3. Duplicate of the same request -> PENDING_EXISTS
+    res = await c.request('POST', '/api/v1/access-requests', {
+      csrf: false, binding: false,
+      body: accessRequestPayload({ collegeEmail: w.email, accessibleEmail: NEW_EMAIL }),
+    });
+    assert.equal(res.status, 409);
+    assert.equal(res.json.error.code, 'PENDING_EXISTS');
+
+    // 4. Accessible email == their already-registered email -> ALREADY_AUTHORIZED
+    res = await c.request('POST', '/api/v1/access-requests', {
+      csrf: false, binding: false,
+      body: accessRequestPayload({ collegeEmail: w.email, accessibleEmail: w.email }),
+    });
+    assert.equal(res.status, 409);
+    assert.equal(res.json.error.code, 'ALREADY_AUTHORIZED');
+
+    // 5. Status lookup requires BOTH emails; wrong pair must not match
+    let ok = await c.request('GET', '/api/v1/access-requests/status', { csrf: false, binding: false });
+    assert.equal(ok.status, 400);
+    ok = await c.request('GET', `/api/v1/access-requests/status?collegeEmail=${encodeURIComponent(w.email)}&accessibleEmail=${encodeURIComponent('other@x.com')}`, { csrf: false, binding: false });
+    assert.equal(ok.status, 404);
+    ok = await c.request('GET', `/api/v1/access-requests/status?collegeEmail=${encodeURIComponent(w.email)}&accessibleEmail=${encodeURIComponent(NEW_EMAIL)}`, { csrf: false, binding: false });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.json.data.status, 'pending');
+
+    // 6. Approve: updates the SAME whitelisted student (no duplicate), swaps login
+    const approved = await accessRequestService.approveRequest(
+      requestId,
+      { studentId: 501, name: 'Admin One' },
+      'test approve',
+      '127.0.0.1'
+    );
+    assert.equal(approved.ok, true);
+    assert.equal(approved.student.id, w.id);
+    assert.equal(approved.student.official_email, w.email); // old mail kept
+    assert.equal(approved.student.current_login_email, NEW_EMAIL); // login switched
+    assert.equal(approved.student.email, NEW_EMAIL);
+    assert.equal(approved.student.section, 'A1');
+    assert.equal(approved.student.mobile_number, '+919876543210');
+    assert.equal(approved.student.voting_eligible, true);
+    assert.equal(approved.student.is_active, true);
+
+    // 7. Status now approved
+    ok = await c.request('GET', `/api/v1/access-requests/status?collegeEmail=${encodeURIComponent(w.email)}&accessibleEmail=${encodeURIComponent(NEW_EMAIL)}`, { csrf: false, binding: false });
+    assert.equal(ok.json.data.status, 'approved');
+
+    // 8. New email is now theirs -> ALREADY_AUTHORIZED
+    res = await c.request('POST', '/api/v1/access-requests', {
+      csrf: false, binding: false,
+      body: accessRequestPayload({ collegeEmail: w.email, accessibleEmail: NEW_EMAIL }),
+    });
+    assert.equal(res.status, 409);
+    assert.equal(res.json.error.code, 'ALREADY_AUTHORIZED');
+  } finally {
+    await db.query(
+      `DELETE FROM student_access_requests WHERE student_id = $1 OR LOWER(college_email) = LOWER($2)`,
+      [w.externalId === w.email ? null : `WHL-${w.externalId}`.slice(0, 64), w.email]
+    );
+    await db.query('DELETE FROM students WHERE id = $1', [w.id]);
+  }
+});
+
+test('access request: requires phone, roll number optional', async () => {
+  const c = new TestClient(baseUrl);
+  const college = `${randomId('')}@oldmail.test.local`;
+  const accessible = `${randomId('')}@newmail.test.local`;
+  let createdId = null;
+  try {
+    // No phone -> VALIDATION_ERROR
+    let res = await c.request('POST', '/api/v1/access-requests', {
+      csrf: false, binding: false,
+      body: accessRequestPayload({ collegeEmail: college, accessibleEmail: accessible, phone: '' }),
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.json.error.code, 'VALIDATION_ERROR');
+    assert.match(res.json.error.message, /phone/i);
+
+    // Empty roll number is fine with otherwise valid values (no whitelist match,
+    // fresh emails) -> request is accepted.
+    res = await c.request('POST', '/api/v1/access-requests', {
+      csrf: false, binding: false,
+      body: accessRequestPayload({ collegeEmail: college, accessibleEmail: accessible, rollNumber: '' }),
+    });
+    assert.equal(res.status, 201, JSON.stringify(res.json));
+    createdId = res.json.data.requestId;
+    const row = await db.query('SELECT roll_number FROM student_access_requests WHERE id = $1', [createdId]);
+    assert.equal(row.rows[0].roll_number, null);
+  } finally {
+    if (createdId) await db.query('DELETE FROM student_access_requests WHERE id = $1', [createdId]);
+    await db.query('DELETE FROM student_access_requests WHERE LOWER(college_email) = LOWER($1)', [college]);
   }
 });

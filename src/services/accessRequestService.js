@@ -20,80 +20,124 @@ function normalizeEmail(v) {
 
 function validatePayload(b) {
   const errors = [];
-  const full_name = String(b.fullName || '').trim();
+  const full_name = String(b.fullName || '').trim().slice(0, 255);
   const student_id = String(b.studentId || '').trim();
   const roll_number = String(b.rollNumber || '').trim();
   const department = String(b.department || '').trim();
   const year_or_semester = String(b.yearOrSemester || '').trim();
+  const section = String(b.section || '').trim().slice(0, 20);
   const college_email = normalizeEmail(b.collegeEmail);
   const accessible_email = normalizeEmail(b.accessibleEmail);
+  const phone = String(b.phone || '').replace(/[\s()-]/g, '').trim();
   const request_reason = REASONS.includes(b.reason) ? b.reason : 'other';
   const reason_detail = String(b.reasonDetail || '').trim().slice(0, 2000);
 
-  if (!full_name || full_name.length > 255) errors.push('Full name is required (max 255 chars).');
+  // The student is identified by their registered college email (old mail);
+  // the accessible email is the new mail they want to sign in with.
   if (student_id.length > 64) errors.push('Student ID must be at most 64 chars.');
   if (roll_number.length > 64) errors.push('Roll number must be at most 64 chars.');
   if (department.length > 120) errors.push('Department must be at most 120 chars.');
   if (year_or_semester.length > 40) errors.push('Year/Semester must be at most 40 chars.');
-  if (college_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(college_email)) errors.push('A valid college email is required.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(college_email)) errors.push('A valid registered college email is required.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(accessible_email)) errors.push('A valid accessible email is required.');
+  if (!/^\+?[0-9]{10,15}$/.test(phone)) errors.push('A valid phone number (10-15 digits, optional + prefix) is required.');
 
   return {
     errors,
-    data: { full_name, student_id, roll_number, department, year_or_semester, college_email, accessible_email, request_reason, reason_detail },
+    data: { full_name, student_id, roll_number, department, year_or_semester, section, college_email, accessible_email, phone, request_reason, reason_detail },
   };
 }
 
 /**
  * Auto-detect the whitelist record (student_id + registered college email)
- * from the student's name + department + semester. The self-service form no
- * longer asks for Student ID or the registered email, so we resolve them here.
- * Returns null when there is no confident single match (admin resolves it).
+ * from the student's registered college email ("old mail"). The self-service
+ * form no longer asks for Student ID or the full name, so we resolve the
+ * student identity by their registered email only — name + class are NOT
+ * checked, which avoids same-name ambiguity (e.g. two "Bhumika" in BCA).
+ * Returns null when no whitelist row owns that email (admin resolves it).
  */
-async function resolveWhitelistMatch({ full_name, department, year_or_semester }) {
-  const name = String(full_name || '').trim();
-  if (!name) return null;
+async function resolveWhitelistMatch({ college_email }) {
+  const email = normalizeEmail(college_email);
+  if (!email) return null;
 
-  const params = [name, name];
-  let sql = `
-    SELECT id, student_id, external_id, email, official_email, current_login_email, department, year_or_semester
-      FROM students
-     WHERE LOWER(name) = LOWER($1) OR LOWER(name) LIKE LOWER($2)
-  `;
-  if (department) {
-    params.push(department);
-    sql += ` AND LOWER(department) = LOWER($${params.length})`;
-  }
-  if (year_or_semester) {
-    params.push(year_or_semester);
-    sql += ` AND LOWER(year_or_semester) = LOWER($${params.length})`;
-  }
-  const rows = await db.query(sql + ` LIMIT 10`, params).then((r) => r.rows);
-
-  if (rows.length === 0) return null;
-  // Exact name match beats a partial (LIKE) match; otherwise a single row is
-  // still considered confident, and an ambiguous many-row match is not.
-  const exact = rows.find((r) => String(r.name || '').toLowerCase() === name.toLowerCase()) || null;
-  const match = exact || (rows.length === 1 ? rows[0] : null);
-  if (!match) return null;
+  const row = await db.query(
+    `SELECT id, student_id, external_id, name, email, official_email, current_login_email,
+            department, year_or_semester, section
+       FROM students
+      WHERE LOWER(current_login_email) = LOWER($1)
+         OR LOWER(official_email) = LOWER($1)
+         OR LOWER(email) = LOWER($1)
+      LIMIT 1`,
+    [email]
+  ).then((r) => r.rows[0] || null);
+  if (!row) return null;
 
   return {
-    student_id: match.student_id || match.external_id || null,
-    college_email: match.official_email || match.email || match.current_login_email || null,
-    matched_name: match.name,
+    id: row.id,
+    student_id: row.student_id || row.external_id || null,
+    college_email: row.official_email || row.email || row.current_login_email || null,
+    current_login_email: row.current_login_email || null,
+    official_email: row.official_email || null,
+    email: row.email || null,
+    matched_name: row.name,
+    department: row.department || null,
+    year_or_semester: row.year_or_semester || null,
+    section: row.section || null,
   };
 }
 
 /**
- * Duplicate rules (spec §8):
- *  - student already exists (by student_id / external_id)        -> ALREADY_AUTHORIZED
- *  - college or accessible email already belongs to an account   -> EMAIL_EXISTS
- *  - same student has a pending request                          -> PENDING_EXISTS (exact message)
- *  - identical pending request from anyone                       -> PENDING_EXISTS
+ * Duplicate rules (spec §8), extended for email-change requests:
+ *  - student matched by their registered email AND their accessible email
+ *    already signs them in no change is needed                       -> ALREADY_AUTHORIZED
+ *  - whitelist row matched by registered email but the accessible email
+ *    is NEW                                                         -> email-change request (allow)
+ *  - college or accessible email already belongs to a different account -> EMAIL_EXISTS
+ *  - same student has a pending request                               -> PENDING_EXISTS
+ *  - identical pending request from anyone                            -> PENDING_EXISTS
  */
-async function findDuplicate(payload) {
+async function findDuplicate(payload, matched) {
   const { student_id, college_email, accessible_email } = payload;
+  const acc = normalizeEmail(accessible_email);
 
+  // ----- Whitelist row resolved from the registered college email -----
+  if (matched && matched.id) {
+    const mine = [matched.current_login_email, matched.official_email, matched.email]
+      .filter(Boolean).map((e) => normalizeEmail(e));
+
+    // They can already sign in with that exact email — no change required.
+    if (mine.includes(acc)) {
+      return { code: 'ALREADY_AUTHORIZED', student: matched };
+    }
+
+    // The new accessible email must not already belong to another student.
+    const other = await db.query(
+      `SELECT id FROM students
+        WHERE id <> $1
+          AND (LOWER(current_login_email) = LOWER($2)
+            OR LOWER(official_email) = LOWER($2)
+            OR LOWER(email) = LOWER($2))
+        LIMIT 1`,
+      [matched.id, acc]
+    ).then((r) => r.rows[0] || null);
+    if (other) return { code: 'EMAIL_EXISTS' };
+
+    // No live duplicate → this is an email/access change request. Allow it;
+    // admin approval will update the existing student instead of adding a new one.
+    const pending = await db.query(
+      `SELECT id FROM student_access_requests
+        WHERE status = 'pending'
+          AND (($1::text <> '' AND LOWER(student_id) = LOWER($1))
+            OR LOWER(accessible_email) = LOWER($2))
+        LIMIT 1`,
+      [student_id || '', acc]
+    ).then((r) => r.rows[0] || null);
+    if (pending) return { code: 'PENDING_EXISTS' };
+
+    return null;
+  }
+
+  // ----- Unknown student (no whitelist match) -----
   if (student_id) {
     const student = await db.query(
       `SELECT id, student_id, external_id, is_active FROM students
@@ -122,7 +166,7 @@ async function findDuplicate(payload) {
          OR LOWER(official_email) = LOWER($1)
          OR LOWER(email) = LOWER($1)
       LIMIT 1`,
-    [accessible_email]
+    [acc]
   ).then((r) => r.rows[0] || null);
   if (email2) return { code: 'EMAIL_EXISTS' };
 
@@ -133,7 +177,7 @@ async function findDuplicate(payload) {
           OR LOWER(accessible_email) = LOWER($2)
           OR ($3::text IS NOT NULL AND LOWER(college_email) = LOWER($3)))
       LIMIT 1`,
-    [student_id || null, accessible_email, college_email || null]
+    [student_id || null, acc, college_email || null]
   ).then((r) => r.rows[0] || null);
   if (pending) return { code: 'PENDING_EXISTS' };
 
@@ -144,20 +188,24 @@ async function submitRequest(payload, ip) {
   const resolved = await resolveWhitelistMatch(payload);
   const student_id = payload.student_id || (resolved && resolved.student_id) || null;
   const college_email = payload.college_email || (resolved && resolved.college_email) || null;
-  const request = { ...payload, student_id, college_email, matched_name: resolved ? resolved.matched_name : null };
+  // Full name is auto-filled from the matched whitelist row; the form itself
+  // no longer asks for it.
+  const full_name = payload.full_name || (resolved && resolved.matched_name) || null;
+  const request = { ...payload, full_name, student_id, college_email, matched_name: resolved ? resolved.matched_name : null };
 
-  const dup = await findDuplicate(request);
+  const dup = await findDuplicate(request, resolved);
   if (dup) return { ok: false, code: dup.code };
 
   const d = request;
   const inserted = await db.query(
     `INSERT INTO student_access_requests
-       (full_name, student_id, roll_number, department, year_or_semester,
-        college_email, accessible_email, request_reason, reason_detail, status, request_ip)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10)
+       (full_name, student_id, roll_number, department, year_or_semester, section,
+        college_email, accessible_email, phone, request_reason, reason_detail, status, request_ip)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12)
      RETURNING id, created_at`,
-    [d.full_name, d.student_id, d.roll_number, d.department, d.year_or_semester,
-     d.college_email, d.accessible_email, d.request_reason, d.reason_detail, ip || null]
+    [d.full_name, d.student_id || null, d.roll_number || null, d.department || null,
+     d.year_or_semester || null, d.section || null,
+     d.college_email, d.accessible_email, d.phone, d.request_reason, d.reason_detail, ip || null]
   ).then((r) => r.rows[0]);
 
   await recordAudit('access_request_submitted', {
@@ -170,17 +218,17 @@ async function submitRequest(payload, ip) {
 }
 
 /**
- * Status lookup requires the full name AND accessible email, so a stranger
- * can't probe arbitrary requests by knowing just one value.
+ * Status lookup requires the registered (old) email AND the accessible (new)
+ * email, so a stranger can't probe arbitrary requests by knowing just one value.
  */
-async function checkStatus(fullName, accessibleEmail) {
+async function checkStatus(collegeEmail, accessibleEmail) {
   const row = await db.query(
     `SELECT id, full_name, student_id, status, rejection_reason, created_at, reviewed_at
        FROM student_access_requests
-      WHERE LOWER(full_name) = LOWER($1) AND LOWER(accessible_email) = LOWER($2)
+      WHERE LOWER(college_email) = LOWER($1) AND LOWER(accessible_email) = LOWER($2)
       ORDER BY created_at DESC
       LIMIT 1`,
-    [String(fullName || '').trim(), normalizeEmail(accessibleEmail)]
+    [normalizeEmail(collegeEmail), normalizeEmail(accessibleEmail)]
   ).then((r) => r.rows[0] || null);
   return row;
 }
@@ -266,17 +314,22 @@ async function approveRequest(requestId, admin, note, ip) {
 
     let student;
     if (existing) {
+      // Email swap: keep the registered (old) mail as official_email, and switch
+      // login to the accessible (new) mail. Also persist roll/section/phone.
       const updated = await client.query(
         `UPDATE students SET
-           name = $2, roll_number = $3, department = $4, year_or_semester = $5,
-           official_email = COALESCE(NULLIF($6,''), official_email),
-           current_login_email = $7, email = COALESCE(NULLIF($6,''), $7),
+           name = COALESCE(NULLIF($2,''), name),
+           roll_number = $3, department = $4, year_or_semester = $5, section = $6,
+           mobile_number = $7,
+           official_email = COALESCE(NULLIF($8,''), official_email),
+           current_login_email = $9, email = $9,
            email_verified = TRUE, is_active = TRUE, voting_eligible = TRUE,
            updated_at = NOW()
          WHERE id = $1
          RETURNING *`,
         [existing.id, req.full_name, req.roll_number || null, req.department || null,
-         req.year_or_semester || null, req.college_email || '', newEmail]
+         req.year_or_semester || null, req.section || null, req.phone || null,
+         req.college_email || '', newEmail]
       ).then((r) => r.rows[0]);
       student = updated;
     } else {
@@ -289,12 +342,13 @@ async function approveRequest(requestId, admin, note, ip) {
         `INSERT INTO students
            (external_id, name, email, password_hash, role, is_active,
             student_id, official_email, current_login_email, email_verified,
-            roll_number, department, year_or_semester, voting_eligible, username)
-         VALUES ($1,$2,$3,$4,'STUDENT',TRUE,$5,$6,$3,TRUE,$7,$8,$9,TRUE,$10)
+            roll_number, department, year_or_semester, section, mobile_number, voting_eligible, username)
+         VALUES ($1,COALESCE(NULLIF($2,''), split_part($3,'@',1)),$3,$4,'STUDENT',TRUE,$5,$6,$3,TRUE,$7,$8,$9,$10,$11,TRUE,$12)
          RETURNING *`,
         [externalId, req.full_name, newEmail, passwordHash,
          studentIdKey, req.college_email || newEmail, req.roll_number || null,
-         req.department || null, req.year_or_semester || null, username]
+         req.department || null, req.year_or_semester || null, req.section || null,
+         req.phone || null, username]
       ).then((r) => r.rows[0]);
       student = inserted;
     }

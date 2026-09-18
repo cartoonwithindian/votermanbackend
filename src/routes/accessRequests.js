@@ -2,7 +2,7 @@
  * Access Request — PUBLIC routes (no authentication)
  *
  * POST /api/v1/access-requests          submit a request
- * GET  /api/v1/access-requests/status?studentId=&accessibleEmail=
+ * GET  /api/v1/access-requests/status?collegeEmail=&accessibleEmail=
  *
  * Duplicate handling (spec §8) returns friendly, specific errors.
  */
@@ -14,7 +14,7 @@ const service = require('../services/accessRequestService');
 
 const submitLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 5,
+  max: parseInt(process.env.ACCESS_REQ_SUBMIT_MAX || '5', 10),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } },
@@ -46,7 +46,7 @@ router.post('/', submitLimiter, async (req, res) => {
           });
         case 'ALREADY_AUTHORIZED':
           return res.status(409).json({
-            error: { code: 'ALREADY_AUTHORIZED', message: 'A student account with this Student ID already exists. Please sign in with Google instead.' },
+            error: { code: 'ALREADY_AUTHORIZED', message: 'This current email is already registered to your account. Please sign in instead of submitting a request.' },
           });
         case 'EMAIL_EXISTS':
           return res.status(409).json({
@@ -74,12 +74,12 @@ router.post('/', submitLimiter, async (req, res) => {
 // ---- GET /status ----
 router.get('/status', statusLimiter, async (req, res) => {
   try {
-    const { fullName, accessibleEmail } = req.query;
-    if (!fullName || !accessibleEmail) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Full name and current email are both required.' } });
+    const { collegeEmail, accessibleEmail } = req.query;
+    if (!collegeEmail || !accessibleEmail) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Registered college email and current email are both required.' } });
     }
 
-    const row = await service.checkStatus(fullName, accessibleEmail);
+    const row = await service.checkStatus(collegeEmail, accessibleEmail);
 
     // Uniform 404 when nothing matches (no request enumeration)
     if (!row) {
