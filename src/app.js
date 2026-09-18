@@ -255,6 +255,7 @@ app.patch('/api/v1/students/profile', requireAuth, studentController.updateProfi
 // =====================================================
 
 // Admin routes with requireAdmin middleware (includes auth check + dev bypass for development)
+app.use('/api/v1/admin/whitelist', requireAdmin, require('./routes/adminWhitelist'));
 app.use('/api/v1/admin/students', requireAdmin, adminStudents);
 app.use('/api/v1/admin/elections', requireAdmin, adminElections);
 app.use('/api/v1/admin/clubs', requireAdmin, adminClubs);

@@ -72,7 +72,7 @@ router.get('/me', loadSession, (req, res) => {
 // these fields before the student can vote or apply as a candidate.
 // =====================================================
 const PROFILE_COURSES = ['BBA', 'BCA', 'BCom', 'MBA', 'MCA'];
-const PROFILE_YEARS = ['1st Year', '2nd Year', '3rd Year'];
+const PROFILE_YEARS = ['1st Year', '2nd Year', '3rd Year', '1 Sem', '3 Sem', '5 Sem'];
 
 router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, res) => {
   try {
@@ -466,8 +466,8 @@ router.post('/otp/send-login', otpLimiter, csrfProtection, async (req, res) => {
       return authError(res, 400, 'INVALID_ROLE', 'OTP login is not available for this role.');
     }
 
-    // Check rate limit
-    const rateCheck = await checkRateLimit(email.toLowerCase(), 'LOGIN_OTP');
+    // Check rate limit (per-IP)
+    const rateCheck = await checkRateLimit(req.ip);
     if (!rateCheck.allowed) {
       return authError(res, 429, 'RATE_LIMITED',
         `Too many OTP requests. Please try again in ${Math.ceil(rateCheck.retryAfterMs / 1000)} seconds.`);
@@ -749,8 +749,8 @@ router.post('/otp/send-reset', passwordResetLimiter, csrfProtection, async (req,
       return authError(res, 400, 'INVALID_ROLE', 'Password reset is not available for this role.');
     }
 
-    // Check rate limit
-    const rateCheck = await checkRateLimit(email.toLowerCase(), 'PASSWORD_RESET');
+    // Check rate limit (per-IP)
+    const rateCheck = await checkRateLimit(req.ip);
     if (!rateCheck.allowed) {
       return authError(res, 429, 'RATE_LIMITED',
         `Too many reset requests. Please try again in ${Math.ceil(rateCheck.retryAfterMs / 1000)} seconds.`);
@@ -1041,30 +1041,43 @@ async function registerOtpHandler(req, res) {
       return authError(res, 400, 'INVALID_ROLE', 'Registration is not available for this role.');
     }
 
-    // Check rate limit
-    const rateCheck = await checkRateLimit(email.toLowerCase(), 'LOGIN_OTP');
+    // Check rate limit (per-IP)
+    const rateCheck = await checkRateLimit(req.ip);
     if (!rateCheck.allowed) {
       return authError(res, 429, 'RATE_LIMITED',
         `Too many registration attempts. Please try again in ${Math.ceil(rateCheck.retryAfterMs / 1000)} seconds.`);
     }
 
-    // Check if email already exists
-    const existingEmail = await db.query(
-      'SELECT id, role FROM students WHERE email = $1 AND is_active = TRUE',
+    // === WHITELIST ENFORCEMENT ===
+    // Only pre-approved (imported) emails may register. Whitelist is the
+    // `students` table seeded from Excel (1227 rows). Each whitelisted row
+    // has email + official_email/current_login_email set but no password yet.
+    // A request for a non-whitelisted email is rejected with 403.
+    const whitelistEntry = await db.query(
+      `SELECT id, password_hash, role, is_active FROM students
+         WHERE LOWER(email) = LOWER($1)
+            OR LOWER(official_email) = LOWER($1)
+            OR LOWER(current_login_email) = LOWER($1)
+         LIMIT 1`,
       [email.toLowerCase()]
     ).then(r => r.rows[0]);
 
-    if (existingEmail) {
-      if (existingEmail.role === requestedRole) {
-        return authError(res, 400, 'EMAIL_EXISTS', 'An account with this email already exists.');
-      }
-      // Different role - generic response
-      return authError(res, 400, 'EMAIL_EXISTS', 'An account with this email already exists.');
+    if (!whitelistEntry) {
+      return authError(res, 403, 'NOT_WHITELISTED', 'This email is not whitelisted for registration. Please contact your administrator to be added.');
     }
+    if (!whitelistEntry.is_active) {
+      return authError(res, 403, 'ACCOUNT_DEACTIVATED', 'This whitelisted account has been deactivated. Please contact your administrator.');
+    }
+    if (whitelistEntry.password_hash) {
+      return authError(res, 400, 'EMAIL_EXISTS', 'An account with this email already exists. Please sign in instead.');
+    }
+    // Whitelisted but not yet activated - allow OTP. Role mismatch is not
+    // checked here; the whitelist was imported as STUDENT by default and
+    // both STUDENT/CANDIDATE registrations claim the same whitelisted identity.
 
-    // Check if username already exists
+    // Check if username already exists (case-insensitive)
     const existingUsername = await db.query(
-      'SELECT id FROM students WHERE external_id = $1',
+      'SELECT id FROM students WHERE LOWER(username) = LOWER($1)',
       [username.trim()]
     ).then(r => r.rows[0]);
 
@@ -1161,14 +1174,24 @@ async function registerVerifyHandler(req, res) {
       return authError(res, 400, 'INVALID_ROLE', 'Invalid role.');
     }
 
-    // Check if email already exists (one email = one account)
-    const existingEmail = await db.query(
-      'SELECT id FROM students WHERE email = $1',
+    // === WHITELIST ENFORCEMENT (verify step) ===
+    const whitelistRecord = await db.query(
+      `SELECT id, password_hash, external_id, is_active FROM students
+         WHERE LOWER(email) = LOWER($1)
+            OR LOWER(official_email) = LOWER($1)
+            OR LOWER(current_login_email) = LOWER($1)
+         LIMIT 1`,
       [email.toLowerCase()]
     ).then(r => r.rows[0]);
 
-    if (existingEmail) {
-      return authError(res, 400, 'EMAIL_EXISTS', 'An account with this email already exists.');
+    if (!whitelistRecord) {
+      return authError(res, 403, 'NOT_WHITELISTED', 'This email is not whitelisted for registration. Please contact your administrator to be added.');
+    }
+    if (!whitelistRecord.is_active) {
+      return authError(res, 403, 'ACCOUNT_DEACTIVATED', 'This whitelisted account has been deactivated. Please contact your administrator.');
+    }
+    if (whitelistRecord.password_hash) {
+      return authError(res, 400, 'EMAIL_EXISTS', 'An account with this email already exists. Please sign in instead.');
     }
 
     // Check if username already exists
@@ -1234,18 +1257,26 @@ async function registerVerifyHandler(req, res) {
       return authError(res, 400, 'ROLE_MISMATCH', 'Verification code does not match selected role.');
     }
 
-    // Create the account
+    // Activate whitelisted account (reuse the pre-imported row)
     const passwordHash = await hashPassword(password);
     await db.query('BEGIN');
     try {
-      // Use username as external_id if enrollment number not provided
-      const externalId = enrollmentNumber || username;
-
       const result = await db.query(
-        `INSERT INTO students (external_id, name, email, password_hash, role, is_active, username, mobile_number, enrollment_number)
-         VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $8)
-         RETURNING id`,
-        [externalId, fullName || username, email.toLowerCase(), passwordHash, requestedRole, username.trim().toLowerCase(), formattedMobile, enrollmentNumber || null]
+        `UPDATE students
+            SET name = COALESCE(NULLIF($1,''), name),
+                email = LOWER($2),
+                official_email = COALESCE(official_email, LOWER($2)),
+                current_login_email = LOWER($2),
+                password_hash = $3,
+                role = $4,
+                is_active = TRUE,
+                username = $5,
+                mobile_number = COALESCE($6, mobile_number),
+                enrollment_number = COALESCE($7, enrollment_number),
+                updated_at = NOW()
+          WHERE id = $8
+          RETURNING id`,
+        [fullName || username, email.toLowerCase(), passwordHash, requestedRole, username.trim().toLowerCase(), formattedMobile, enrollmentNumber || null, whitelistRecord.id]
       );
 
       const newStudentId = result.rows[0].id;
