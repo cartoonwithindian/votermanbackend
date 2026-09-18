@@ -6,6 +6,29 @@
 const studentService = require('../services/studentService');
 const { recordAudit } = require('../lib/authDb');
 
+// Derive department / year-or-semester / section from a student_id like:
+//   "BBA-A1-3SEM-030" -> { BBA, A1, 3 Sem }
+//   "BCOM-1SEM-005"   -> { BCOM, -, 1 Sem }
+//   "BCA-A1-5SEM-042" -> { BCA, A1, 5 Sem }
+function classFromStudentId(studentId) {
+  if (!studentId) return { department: null, yearOrSemester: null, section: null };
+  const parts = String(studentId).trim().split('-');
+  // Pattern 1: DEPT-A#-NSEM-NNN  (section middle segment like A1/A2/A3)
+  // Pattern 2: DEPT-NSEM-NNN     (no section, e.g. BCOM/MBA/MCA)
+  const semIndex = parts.findIndex((p) => /^\d+SEM$/i.test(p));
+  if (semIndex <= 0 || semIndex >= parts.length - 1) {
+    return { department: parts[0] || null, yearOrSemester: null, section: null };
+  }
+  const sectionParts = parts.slice(1, semIndex);
+  const department = parts[0] || null;
+  const yearOrSemester = String(parts[semIndex]).replace(/^(\d+)SEM$/i, '$1 Sem');
+  const section =
+    sectionParts.length > 0 && sectionParts[0].length <= 4
+      ? sectionParts[0]
+      : null;
+  return { department, yearOrSemester, section };
+}
+
 class StudentController {
   /**
    * GET /api/v1/students
@@ -87,15 +110,24 @@ class StudentController {
         });
       }
 
+      // If class fields are missing on the row (common when the whitelist row
+      // was created with only name/email), derive them from the student_id
+      // (e.g. "BCA-A1-3SEM-030" -> BCA / A1 / 3 Sem, "BCOM-1SEM-005" -> BCOM / - / 1 Sem).
+      const parsedClass = classFromStudentId(student.student_id);
+      const department = student.department || parsedClass.department;
+      const yearOrSemester = student.year_or_semester || parsedClass.yearOrSemester;
+      const section = student.section || parsedClass.section;
+
       res.json({
         data: {
           id: String(student.id),
+          studentId: student.student_id || null,
           name: student.name,
           email: student.email || student.official_email || student.current_login_email || null,
           enrollmentNumber: student.roll_number || student.enrollment_number || null,
-          department: student.department || null,
-          year: student.year_or_semester || null,
-          section: student.section || null,
+          department,
+          year: yearOrSemester,
+          section,
           phone: student.mobile_number || null,
           avatar: student.profile_image_url || null,
           profileImageUrl: student.profile_image_url || null,
