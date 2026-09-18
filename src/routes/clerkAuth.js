@@ -82,6 +82,41 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
     ).then((r) => r.rows[0]);
 
     if (!account) {
+      // ---- WHITELIST ENFORCEMENT for Google ----
+      // Only whitelisted emails (or invited admins/CAD) may continue with Google.
+      // Others get a clear error to contact support team.
+      const whitelistCheck = await db.query(
+        `SELECT id, is_active FROM students
+           WHERE LOWER(email) = LOWER($1)
+              OR LOWER(official_email) = LOWER($1)
+              OR LOWER(current_login_email) = LOWER($1)
+           LIMIT 1`,
+        [email.toLowerCase()]
+      ).then(r => r.rows[0]);
+      const isWhitelisted = !!whitelistCheck;
+      const isInvitedAdmin = adminList.includes(email.toLowerCase());
+      const isCadInvited = cadList.map(e => e.toLowerCase()).includes(email.toLowerCase());
+      if (!isWhitelisted && !isInvitedAdmin && !isCadInvited) {
+        await recordAudit('clerk_login_denied_not_whitelisted', {
+          ip: req.ip,
+          metadata: { email, clerkUserId },
+        });
+        return authError(res, 403, 'NOT_WHITELISTED', 'This Google account is not whitelisted. Only whitelisted students can login or register. Please contact the support team.');
+      }
+      if (whitelistCheck && !whitelistCheck.is_active) {
+        return authError(res, 403, 'ACCOUNT_DEACTIVATED', 'This whitelisted account has been deactivated. Please contact the support team.');
+      }
+      if (whitelistCheck) {
+        const pending = await db.query(
+          `SELECT * FROM students WHERE id = $1`,
+          [whitelistCheck.id]
+        ).then(r => r.rows[0]);
+        if (pending) {
+          account = pending;
+          console.log('clerk-session: using pending whitelist row', { email });
+        }
+      }
+      if (!account) {
       // ---- Auto-provision every new Google account as STUDENT ----
       const name = String(req.body.name || '').trim() || email.split('@')[0];
       const usernameBase = email.split('@')[0].replace(/[^a-z0-9._-]/gi, '').toLowerCase() || 'user';
@@ -89,7 +124,6 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
       const randomPassword = randomBytes(24).toString('base64url');
       const passwordHash = await hashPassword(randomPassword);
       const externalId = `CLERK-${clerkUserId}`;
-      const isInvitedAdmin = adminList.includes(email);
 
       // Invited admins are created straight as ADMIN.
       // CAD is gated: when CAD_EMAILS is set, only listed emails become CAD;
@@ -113,6 +147,7 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
       ).then((r) => r.rows[0]);
       account = inserted;
       console.log('clerk-session: provisioned invited account', { email, role: roleToUse });
+      }
     } else if (adminList.includes(email) && account.role !== 'ADMIN') {
       // Bootstrap: promote listed emails to ADMIN on sign-in.
       // Checked FIRST: ADMIN always wins when an email is on both lists.

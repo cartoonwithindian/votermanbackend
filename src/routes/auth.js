@@ -217,7 +217,54 @@ router.post('/login', loginLimiter, csrfProtection, async (req, res) => {
     // Check if account exists â€” unknown emails get an explicit "no account
     // found" (404 + needsRegistration) so first-time users are told to
     // register. Wrong passwords still get a generic 401 below.
+    // WHITELIST ENFORCEMENT: only whitelisted emails may login/register in
+    // student/candidate portals. If the identifier looks like an email and
+    // is not whitelisted, return 403 instead of 404 to enforce the whitelist.
     if (!account) {
+      const identifierTrim = String(userIdentifier).trim();
+      const isEmail = identifierTrim.includes('@');
+      if (isEmail) {
+        const whitelistCheck = await db.query(
+          `SELECT id, password_hash, is_active FROM students
+             WHERE LOWER(email) = LOWER($1)
+                OR LOWER(official_email) = LOWER($1)
+                OR LOWER(current_login_email) = LOWER($1)
+             LIMIT 1`,
+          [identifierTrim.toLowerCase()]
+        ).then(r => r.rows[0]);
+        if (!whitelistCheck) {
+          incFailedLogin();
+          await recordAudit('login_failed', {
+            ip: req.ip,
+            metadata: { identifier: userIdentifier, role: requestedRole, reason: 'not_whitelisted' },
+          });
+          return res.status(403).json({
+            error: { code: 'NOT_WHITELISTED', message: 'This email is not whitelisted. Only whitelisted students can login or register. Please contact the support team.' },
+          });
+        }
+        if (!whitelistCheck.is_active) {
+          incFailedLogin();
+          await recordAudit('login_failed', {
+            ip: req.ip,
+            metadata: { identifier: userIdentifier, role: requestedRole, reason: 'whitelist_deactivated' },
+          });
+          return res.status(403).json({
+            error: { code: 'ACCOUNT_DEACTIVATED', message: 'This whitelisted account has been deactivated. Please contact the support team.' },
+          });
+        }
+        // Whitelisted but not yet registered (no password) -> tell them to register
+        if (!whitelistCheck.password_hash) {
+          incFailedLogin();
+          await recordAudit('login_failed', {
+            ip: req.ip,
+            metadata: { identifier: userIdentifier, role: requestedRole, reason: 'whitelist_pending_registration' },
+          });
+          return res.status(404).json({
+            error: { code: 'ACCOUNT_NOT_FOUND', message: 'No account found for this email. Please register first.' },
+            data: { needsRegistration: true },
+          });
+        }
+      }
       incFailedLogin();
       await recordAudit('login_failed', {
         ip: req.ip,
@@ -517,7 +564,22 @@ router.post('/otp/send-login', otpLimiter, csrfProtection, async (req, res) => {
         },
       });
     } else {
-      // No account exists - create OTP challenge anyway for account enumeration protection
+      // No account - WHITELIST ENFORCEMENT: only whitelisted can get OTP
+      const whitelistCheck = await db.query(
+        `SELECT id, is_active FROM students
+           WHERE LOWER(email) = LOWER($1)
+              OR LOWER(official_email) = LOWER($1)
+              OR LOWER(current_login_email) = LOWER($1)
+           LIMIT 1`,
+        [email.toLowerCase()]
+      ).then(r => r.rows[0]);
+      if (!whitelistCheck) {
+        return authError(res, 403, 'NOT_WHITELISTED', 'This email is not whitelisted. Only whitelisted students can login or register. Please contact the support team.');
+      }
+      if (!whitelistCheck.is_active) {
+        return authError(res, 403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated. Please contact the support team.');
+      }
+      // Whitelisted pending - create OTP for registration flow
       const { id: challengeId, otp, expiresAt } = await createOtpChallenge(
         email.toLowerCase(),
         'LOGIN_OTP',
@@ -525,17 +587,19 @@ router.post('/otp/send-login', otpLimiter, csrfProtection, async (req, res) => {
         req.ip
       );
 
-      // Send email (will fail for non-existent email, but that's expected)
       try {
         await sendLoginOtp(email.toLowerCase(), otp);
       } catch (emailError) {
-        // Non-existent email - this is expected, don't show error
+        console.error('Failed to send OTP to whitelisted pending:', emailError.message);
+        return authError(res, 500, 'EMAIL_FAILED', 'Failed to send verification code. Please try again.');
       }
 
-      // Return same response as if account existed (account enumeration protection)
       return res.json({
         data: {
-          message: 'If an account matches the information provided, a verification code has been sent.',
+          message: 'Verification code sent. Please complete registration.',
+          challengeId,
+          expiresIn: 300,
+          needsRegistration: true,
         },
       });
     }
@@ -582,8 +646,22 @@ router.post('/otp/verify-login', otpLimiter, csrfProtection, async (req, res) =>
     ).then(r => r.rows[0]);
 
     if (!accountData) {
-      // No account found - verify OTP is valid, then return needsRegistration
-      // Use findValidChallenge to NOT mark OTP as used yet
+      // No account - WHITELIST ENFORCEMENT: check if email is whitelisted
+      const whitelistCheck = await db.query(
+        `SELECT id, is_active FROM students
+           WHERE LOWER(email) = LOWER($1)
+              OR LOWER(official_email) = LOWER($1)
+              OR LOWER(current_login_email) = LOWER($1)
+           LIMIT 1`,
+        [email.toLowerCase()]
+      ).then(r => r.rows[0]);
+      if (!whitelistCheck) {
+        return authError(res, 403, 'NOT_WHITELISTED', 'This email is not whitelisted. Only whitelisted students can login or register. Please contact the support team.');
+      }
+      if (!whitelistCheck.is_active) {
+        return authError(res, 403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated. Please contact the support team.');
+      }
+      // Whitelisted pending - verify OTP is valid, then return needsRegistration
       const { findValidChallenge, verifyOtp } = require('../services/otpService');
       const challenge = await findValidChallenge(email.toLowerCase(), 'LOGIN_OTP', requestedRole);
 
@@ -1063,10 +1141,10 @@ async function registerOtpHandler(req, res) {
     ).then(r => r.rows[0]);
 
     if (!whitelistEntry) {
-      return authError(res, 403, 'NOT_WHITELISTED', 'This email is not whitelisted for registration. Please contact your administrator to be added.');
+      return authError(res, 403, 'NOT_WHITELISTED', 'This email is not whitelisted for registration. Only whitelisted students can login or register. Please contact the support team.');
     }
     if (!whitelistEntry.is_active) {
-      return authError(res, 403, 'ACCOUNT_DEACTIVATED', 'This whitelisted account has been deactivated. Please contact your administrator.');
+      return authError(res, 403, 'ACCOUNT_DEACTIVATED', 'This whitelisted account has been deactivated. Please contact the support team.');
     }
     if (whitelistEntry.password_hash) {
       return authError(res, 400, 'EMAIL_EXISTS', 'An account with this email already exists. Please sign in instead.');
@@ -1185,10 +1263,10 @@ async function registerVerifyHandler(req, res) {
     ).then(r => r.rows[0]);
 
     if (!whitelistRecord) {
-      return authError(res, 403, 'NOT_WHITELISTED', 'This email is not whitelisted for registration. Please contact your administrator to be added.');
+      return authError(res, 403, 'NOT_WHITELISTED', 'This email is not whitelisted for registration. Only whitelisted students can login or register. Please contact the support team.');
     }
     if (!whitelistRecord.is_active) {
-      return authError(res, 403, 'ACCOUNT_DEACTIVATED', 'This whitelisted account has been deactivated. Please contact your administrator.');
+      return authError(res, 403, 'ACCOUNT_DEACTIVATED', 'This whitelisted account has been deactivated. Please contact the support team.');
     }
     if (whitelistRecord.password_hash) {
       return authError(res, 400, 'EMAIL_EXISTS', 'An account with this email already exists. Please sign in instead.');
