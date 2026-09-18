@@ -13,11 +13,13 @@ const { recordAudit } = require('../lib/authDb');
 function classFromStudentId(studentId) {
   if (!studentId) return { department: null, yearOrSemester: null, section: null };
   const parts = String(studentId).trim().split('-');
-  // Pattern 1: DEPT-A#-NSEM-NNN  (section middle segment like A1/A2/A3)
+  // Pattern 1: DEPT-A#-NSEM-NNN (section middle segment like A1/A2/A3)
   // Pattern 2: DEPT-NSEM-NNN     (no section, e.g. BCOM/MBA/MCA)
   const semIndex = parts.findIndex((p) => /^\d+SEM$/i.test(p));
   if (semIndex <= 0 || semIndex >= parts.length - 1) {
-    return { department: parts[0] || null, yearOrSemester: null, section: null };
+    // Not parseable (e.g. WHITELIST-... or REG-...): return nulls so the
+    // caller falls back to whatever the DB row actually stores.
+    return { department: null, yearOrSemester: null, section: null };
   }
   const sectionParts = parts.slice(1, semIndex);
   const department = parts[0] || null;
@@ -113,7 +115,10 @@ class StudentController {
       // If class fields are missing on the row (common when the whitelist row
       // was created with only name/email), derive them from the student_id
       // (e.g. "BCA-A1-3SEM-030" -> BCA / A1 / 3 Sem, "BCOM-1SEM-005" -> BCOM / - / 1 Sem).
-      const parsedClass = classFromStudentId(student.student_id);
+      // Fall back to external_id when the row predates student_id.
+      const parsedClass =
+        classFromStudentId(student.student_id) ||
+        classFromStudentId(student.external_id);
       const department = student.department || parsedClass.department;
       const yearOrSemester = student.year_or_semester || parsedClass.yearOrSemester;
       const section = student.section || parsedClass.section;
