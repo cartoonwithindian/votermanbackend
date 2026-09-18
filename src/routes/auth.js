@@ -2016,59 +2016,10 @@ router.post('/register/clerk', registerLimiter, requireClerkMiddleware, async (r
     }
     const email = verified.email;
 
-    // ---- 2. Existing account? Point them at sign-in ----
-    const existing = await db.query(
-      `SELECT id, role, password_hash FROM students
-        WHERE LOWER(current_login_email) = LOWER($1) OR LOWER(email) = LOWER($1)
-        LIMIT 1`,
-      [email]
-    ).then((r) => r.rows[0]);
-
-    if (existing) {
-      return authError(res, 409, 'EMAIL_EXISTS',
-        'An account with this email already exists. Please sign in with the one-time code sent to your email.');
-    }
-
-    // ---- 3. Validate roll number + name ----
-    // Roll number is required for direct student registration, optional when
-    // registering through the candidate portal (the application form collects
-    // the enrollment number anyway).
-    const roll = String(rollNumber || '').trim();
-    if (roll && (roll.length < 3 || roll.length > 64)) {
-      return authError(res, 400, 'INVALID_ROLL', 'Please enter a valid roll / enrollment number (3-64 characters).');
-    }
-    if (!roll && requestedRole === 'STUDENT') {
-      return authError(res, 400, 'INVALID_ROLL', 'Please enter a valid roll / enrollment number (3-64 characters).');
-    }
-
-    // Name defaults to the email prefix when not supplied.
-    const name = String(fullName || '').trim() || email.split('@')[0];
-    if (!name || name.length < 2 || name.length > 255) {
-      return authError(res, 400, 'INVALID_NAME', 'Please enter your full name (2-255 characters).');
-    }
-    // Registration name IS the account name â€” it pre-fills the candidate
-    // application form and shows on dashboards/profile.
-
-    // ---- Password (required; used for email + password sign-in) ----
-    if (!password || typeof password !== 'string') {
-      return authError(res, 400, 'INVALID_PASSWORD', 'Please choose a password (at least 12 characters).');
-    }
-    const passwordPolicyError = validatePasswordPolicy(password, email.split('@')[0]);
-    if (passwordPolicyError) {
-      return authError(res, 400, 'INVALID_PASSWORD', passwordPolicyError);
-    }
-
-    // ---- Phone / mobile number (required) ----
-    const phone = String(mobileNumber || '').replace(/[\s()-]/g, '');
-    if (!phone || !/^\+?[0-9]{10,15}$/.test(phone)) {
-      return authError(res, 400, 'INVALID_PHONE', 'Please enter a valid phone number (10-15 digits).');
-    }
-
-    // ---- 3.5 WHITELIST ENFORCEMENT ----
-    // Same policy as the OTP registration flow: every email must already be
-    // present (whitelisted) in the students table. Matching rows are reused
-    // (their external_id / official_email / is_active survive); rows that were
-    // already activated are told to sign in instead.
+    // ---- 2. Whitelist enforcement (identity source) ----
+    // Pre-registered whitelist rows carry the student's official identity
+    // (name, roll, mobile). A matching row must exist to register; its values
+    // become the fallback for anything the form leaves blank.
     const whitelistEntry = await db.query(
       `SELECT * FROM students
          WHERE LOWER(email) = LOWER($1)
@@ -2086,6 +2037,36 @@ router.post('/register/clerk', registerLimiter, requireClerkMiddleware, async (r
     }
     if (whitelistEntry.password_hash) {
       return authError(res, 400, 'EMAIL_EXISTS', 'An account with this email already exists. Please sign in instead.');
+    }
+
+    // ---- 3. Roll / name / mobile (fall back to the whitelist row) ----
+    // Roll number is optional; the whitelist row usually supplies it already.
+    const roll = String(rollNumber || '').trim() || String(whitelistEntry.roll_number || '').trim();
+    if (roll && (roll.length < 3 || roll.length > 64)) {
+      return authError(res, 400, 'INVALID_ROLL', 'Please enter a valid roll / enrollment number (3-64 characters).');
+    }
+
+    // Name defaults to the whitelist name, then to the email prefix.
+    const name = String(fullName || '').trim() || String(whitelistEntry.name || '').trim() || email.split('@')[0];
+    if (!name || name.length < 2 || name.length > 255) {
+      return authError(res, 400, 'INVALID_NAME', 'Please enter your full name (2-255 characters).');
+    }
+    // Registration name IS the account name — it pre-fills the candidate
+    // application form and shows on dashboards/profile.
+
+    // ---- Password (required; used for email + password sign-in) ----
+    if (!password || typeof password !== 'string') {
+      return authError(res, 400, 'INVALID_PASSWORD', 'Please choose a password (at least 12 characters).');
+    }
+    const passwordPolicyError = validatePasswordPolicy(password, email.split('@')[0]);
+    if (passwordPolicyError) {
+      return authError(res, 400, 'INVALID_PASSWORD', passwordPolicyError);
+    }
+
+    // ---- Mobile number (optional; falls back to the whitelist row) ----
+    const phone = String(mobileNumber || '').replace(/[\s()-]/g, '') || String(whitelistEntry.mobile_number || '').trim();
+    if (phone && !/^\+?[0-9]{10,15}$/.test(phone)) {
+      return authError(res, 400, 'INVALID_PHONE', 'Please enter a valid phone number (10-15 digits).');
     }
 
     // ---- 4. Create the account (Clerk user keeps the password too) ----
