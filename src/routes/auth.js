@@ -2041,7 +2041,8 @@ router.post('/register/clerk', registerLimiter, requireClerkMiddleware, async (r
       return authError(res, 400, 'INVALID_ROLL', 'Please enter a valid roll / enrollment number (3-64 characters).');
     }
 
-    const name = String(fullName || '').trim();
+    // Name defaults to the email prefix when not supplied.
+    const name = String(fullName || '').trim() || email.split('@')[0];
     if (!name || name.length < 2 || name.length > 255) {
       return authError(res, 400, 'INVALID_NAME', 'Please enter your full name (2-255 characters).');
     }
@@ -2063,6 +2064,30 @@ router.post('/register/clerk', registerLimiter, requireClerkMiddleware, async (r
       return authError(res, 400, 'INVALID_PHONE', 'Please enter a valid phone number (10-15 digits).');
     }
 
+    // ---- 3.5 WHITELIST ENFORCEMENT ----
+    // Same policy as the OTP registration flow: every email must already be
+    // present (whitelisted) in the students table. Matching rows are reused
+    // (their external_id / official_email / is_active survive); rows that were
+    // already activated are told to sign in instead.
+    const whitelistEntry = await db.query(
+      `SELECT * FROM students
+         WHERE LOWER(email) = LOWER($1)
+            OR LOWER(official_email) = LOWER($1)
+            OR LOWER(current_login_email) = LOWER($1)
+         LIMIT 1`,
+      [email.toLowerCase()]
+    ).then(r => r.rows[0]);
+
+    if (!whitelistEntry) {
+      return authError(res, 403, 'NOT_WHITELISTED', 'This email is not whitelisted for registration. Only whitelisted students can login or register. Please contact the support team.');
+    }
+    if (!whitelistEntry.is_active) {
+      return authError(res, 403, 'ACCOUNT_DEACTIVATED', 'This whitelisted account has been deactivated. Please contact the support team.');
+    }
+    if (whitelistEntry.password_hash) {
+      return authError(res, 400, 'EMAIL_EXISTS', 'An account with this email already exists. Please sign in instead.');
+    }
+
     // ---- 4. Create the account (Clerk user keeps the password too) ----
     const identifier = email.split('@')[0];
     const passwordHash = await hashPassword(password);
@@ -2071,8 +2096,8 @@ router.post('/register/clerk', registerLimiter, requireClerkMiddleware, async (r
     // Duplicate roll number â†’ the roll number IS the student identity.
     if (roll) {
       const dupRoll = await db.query(
-        'SELECT id FROM students WHERE LOWER(roll_number) = LOWER($1) LIMIT 1',
-        [roll]
+        'SELECT id FROM students WHERE LOWER(roll_number) = LOWER($1) AND id != $2 LIMIT 1',
+        [roll, whitelistEntry.id]
       ).then((r) => r.rows[0]);
       if (dupRoll) {
         return authError(res, 409, 'ROLL_EXISTS',
@@ -2080,12 +2105,27 @@ router.post('/register/clerk', registerLimiter, requireClerkMiddleware, async (r
       }
     }
 
+    // Reuse the whitelisted row instead of inserting a fresh one so imported
+    // student identity (external_id, official_email) is preserved exactly like
+    // the Brevo OTP registration path did.
+    const username = `${identifier.replace(/[^a-z0-9._-]/gi, '').toLowerCase() || 'user'}.${Date.now().toString(36).slice(-4)}`;
     const inserted = await db.query(
-      `INSERT INTO students (external_id, name, email, current_login_email, password_hash,
-                             roll_number, mobile_number, role, is_active, email_verified, username)
-       VALUES ($1, $2, $3, $3, $4, NULLIF($5, ''), $6, $7, TRUE, TRUE, $8)
-       RETURNING *`,
-      [`REG-${Date.now()}`, name, email, passwordHash, roll, phone, storedRole, `${identifier.replace(/[^a-z0-9._-]/gi, '').toLowerCase() || 'user'}.${Date.now().toString(36).slice(-4)}`]
+      `UPDATE students
+          SET name = $2,
+              email = LOWER($3),
+              official_email = COALESCE(official_email, LOWER($3)),
+              current_login_email = LOWER($3),
+              password_hash = $4,
+              roll_number = COALESCE(NULLIF($5, ''), roll_number),
+              mobile_number = COALESCE(NULLIF($6, ''), mobile_number),
+              role = $7,
+              is_active = TRUE,
+              email_verified = TRUE,
+              username = COALESCE(NULLIF(username, ''), $8),
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING *`,
+      [whitelistEntry.id, name, email, passwordHash, roll, phone, storedRole, username]
     ).then((r) => r.rows[0]);
     account = inserted;
 
