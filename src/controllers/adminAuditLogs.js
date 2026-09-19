@@ -21,8 +21,8 @@ async function list(req, res) {
         [limit]
       ),
       db.query(
-        `SELECT a.id, NULL::int AS student_id, a.event_type AS action, a.ip_address,
-                 jsonb_build_object('entityType', a.entity_type, 'entityId', a.entity_id, 'name', (a.details->>'name')) AS metadata,
+        `SELECT a.id, NULL::int AS student_id, a.action, a.ip_address,
+                 jsonb_build_object('entityType', a.entity_type, 'entityId', a.entity_id, 'name', (a.metadata->>'name')) AS metadata,
                  a.created_at,
                  a.actor_id AS student_id_ref,
                  s.name AS user_name, s.role AS user_role

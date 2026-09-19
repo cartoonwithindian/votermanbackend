@@ -41,16 +41,15 @@ async function getLive(req, res) {
                    p.name AS position_name,
                    e.id AS election_id,
                    e.name AS election_name,
-                   COALESCE(cl.name, ct.name) AS scope_name,
+                   ct.name AS scope_name,
                    COUNT(v.id)::int AS votes
                  FROM candidates c
                  JOIN positions p ON p.id = c.position_id
-                 LEFT JOIN clubs cl ON cl.id = p.club_id
-                 LEFT JOIN constituencies ct ON ct.id = p.constituency_id
-                 LEFT JOIN elections e ON e.id = COALESCE(cl.election_id, ct.election_id)
+                 JOIN constituencies ct ON ct.id = p.constituency_id
+                 JOIN elections e ON e.id = ct.election_id
                  LEFT JOIN votes v ON v.candidate_id = c.id AND v.position_id = p.id
                  WHERE c.is_active = TRUE
-                 GROUP BY c.id, c.name, p.name, e.id, e.name, cl.name, ct.name
+                 GROUP BY c.id, c.name, p.name, e.id, e.name, ct.name
                  ORDER BY votes DESC, c.name ASC
                  LIMIT 10`),
     ]);
