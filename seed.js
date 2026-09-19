@@ -32,13 +32,14 @@ async function seed() {
   if (command === 'down') {
     console.log('Rolling back seed data...\n');
     await pool.query(`
+      DELETE FROM vote_receipts WHERE election_id = 1;
       DELETE FROM votes WHERE election_id = 1;
       DELETE FROM voter_authorizations WHERE election_id = 1;
       DELETE FROM candidates WHERE position_id IN (
-        SELECT id FROM positions WHERE club_id IN (SELECT id FROM clubs WHERE election_id = 1)
+        SELECT id FROM positions WHERE constituency_id IN (SELECT id FROM constituencies WHERE election_id = 1)
       );
-      DELETE FROM positions WHERE club_id IN (SELECT id FROM clubs WHERE election_id = 1);
-      DELETE FROM clubs WHERE election_id = 1;
+      DELETE FROM positions WHERE constituency_id IN (SELECT id FROM constituencies WHERE election_id = 1);
+      DELETE FROM constituencies WHERE election_id = 1;
       DELETE FROM elections WHERE id = 1;
       DELETE FROM students WHERE external_id LIKE 'STU-%';
     `);
@@ -82,7 +83,8 @@ async function seed() {
 
     for (const s of students) {
       await pool.query(
-        'INSERT INTO students (id, external_id, name, email) VALUES ($1, $2, $3, $4)',
+        `INSERT INTO students (id, external_id, name, email, department, year_or_semester, section)
+         VALUES ($1, $2, $3, $4, 'BCA', '2nd Year', 'A')`,
         [s.id, s.external_id, s.name, s.email]
       );
     }
@@ -91,13 +93,14 @@ async function seed() {
     // Create election
     console.log('2. Creating election...');
     const electionResult = await pool.query(`
-      INSERT INTO elections (name, description, status, start_time, end_time)
+      INSERT INTO elections (name, description, status, start_time, end_time, category)
       VALUES (
         'Student Council Election',
         'Annual student council election for the upcoming academic year',
         'OPEN',
         NOW(),
-        NOW() + INTERVAL '7 days'
+        NOW() + INTERVAL '7 days',
+        'CLASS_REPRESENTATIVE'
       )
       RETURNING id
     `);
@@ -105,33 +108,32 @@ async function seed() {
     const electionId = electionResult.rows[0].id;
     console.log(`   Election ID: ${electionId}\n`);
 
-    // Create Techno Club
-    console.log('3. Creating club...');
-    const clubResult = await pool.query(`
-      INSERT INTO clubs (election_id, name, description, display_order)
-      VALUES ($1, 'Techno Club', 'Technology and programming enthusiasts club', 1)
+    // Create constituency
+    console.log('3. Creating constituency...');
+    const constituencyResult = await pool.query(`
+      INSERT INTO constituencies (election_id, department, year, section, name)
+      VALUES ($1, 'BCA', '2nd Year', 'A', 'BCA 2nd Year Section A')
       RETURNING id
     `, [electionId]);
 
-    const clubId = clubResult.rows[0].id;
-    console.log(`   Club ID: ${clubId}\n`);
+    const constituencyId = constituencyResult.rows[0].id;
+    console.log(`   Constituency ID: ${constituencyId}\n`);
 
     // Create positions
     console.log('4. Creating positions...');
     const positions = [
-      { name: 'Leader', description: 'Club president and main representative' },
-      { name: 'Co-Leader', description: 'Vice president and deputy representative' },
-      { name: 'Secretary', description: 'Takes meeting notes and manages communications' },
+      { name: 'Class Representative (Boys)', description: 'Class representative for boys of the section' },
+      { name: 'Class Representative (Girls)', description: 'Class representative for girls of the section' },
     ];
 
     const positionIds = [];
     let order = 1;
     for (const p of positions) {
       const result = await pool.query(`
-        INSERT INTO positions (club_id, name, description, display_order)
+        INSERT INTO positions (constituency_id, name, description, display_order)
         VALUES ($1, $2, $3, $4)
         RETURNING id
-      `, [clubId, p.name, p.description, order]);
+      `, [constituencyId, p.name, p.description, order]);
       positionIds.push(result.rows[0].id);
       order++;
     }
@@ -141,11 +143,9 @@ async function seed() {
     console.log('5. Creating candidates...');
     const candidates = [
       { positionIdx: 0, name: 'Alex Chen', description: '3rd year Computer Science student' },
-      { positionIdx: 0, name: 'Jordan Lee', description: 'Active member of coding club' },
-      { positionIdx: 1, name: 'Taylor Kim', description: 'Technical lead in multiple projects' },
+      { positionIdx: 0, name: 'Jordan Lee', description: 'Active class representative candidate' },
+      { positionIdx: 1, name: 'Taylor Kim', description: 'Student council volunteer' },
       { positionIdx: 1, name: 'Morgan Patel', description: 'Experience in event coordination' },
-      { positionIdx: 2, name: 'Casey Wong', description: 'Detail-oriented with excellent writing skills' },
-      { positionIdx: 2, name: 'Riley Thompson', description: 'Previous secretary experience' },
     ];
 
     for (const c of candidates) {
@@ -175,7 +175,7 @@ async function seed() {
     console.log('\nTest data created:');
     console.log(`- ${students.length} students`);
     console.log('- 1 election (Student Council Election)');
-    console.log('- 1 club (Techno Club)');
+    console.log('- 1 constituency (BCA 2nd Year Section A)');
     console.log(`- ${positions.length} positions`);
     console.log(`- ${candidates.length} candidates`);
     console.log(`- ${students.length} voter authorizations`);

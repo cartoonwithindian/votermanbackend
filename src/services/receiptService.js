@@ -152,14 +152,12 @@ class ReceiptService {
         v.id as vote_id,
         v.student_id,
         st.name as student_name,
-        c.name as club_name,
         p.name as position_name,
         ca.name as candidate_name
        FROM vote_receipts vr
        JOIN elections e ON vr.election_id = e.id
        JOIN votes v ON vr.vote_id = v.id
        JOIN students st ON v.student_id = st.id
-       JOIN clubs c ON v.club_id = c.id
        JOIN positions p ON v.position_id = p.id
        JOIN candidates ca ON v.candidate_id = ca.id
        WHERE vr.student_id = $1 AND vr.election_id = $2`,
@@ -182,7 +180,6 @@ class ReceiptService {
       voteId: r.vote_id,
       studentId: r.student_id,
       studentName: r.student_name,
-      clubName: r.club_name,
       positionName: r.position_name,
       candidateName: r.candidate_name,
     };

@@ -413,7 +413,7 @@ class ElectionController {
           totalEligible: result.totalEligible,
           totalVotes: result.totalVotes,
           participation: result.participation,
-          clubs: result.clubs,
+          constituencies: result.constituencies,
         },
       });
     } catch (err) {

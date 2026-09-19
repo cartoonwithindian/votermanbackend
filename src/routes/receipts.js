@@ -79,7 +79,6 @@ router.get('/me/:electionId', loadSession, requireAuth, async (req, res, next) =
         },
         // Vote details (what the student voted for)
         vote: {
-          club: receipt.clubName,
           position: receipt.positionName,
           candidate: receipt.candidateName,
         },

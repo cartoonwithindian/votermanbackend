@@ -6,8 +6,7 @@
  * - GET /candidates         : List approved candidates for student view
  * - GET /candidates/:id     : Get single candidate (public)
  *
- * These endpoints return candidates from candidate_applications with status='approved',
- * not from the old candidates table which is now used internally by the club election path.
+ * These endpoints return candidates from candidate_applications with status='approved'.
  */
 
 const candidateService = require('../services/candidateService');
@@ -118,7 +117,7 @@ class CandidateController {
   /**
    * PATCH /api/v1/candidates/:id - Update candidate (admin only)
    *
-   * Admin-only endpoint for managing candidates in the old club election path.
+   * Admin-only endpoint for managing ballot candidates.
    * Public reads stay open; writes require an authenticated ADMIN session, a
    * valid CSRF token, and the election must be DRAFT/SCHEDULED.
    */

@@ -20,7 +20,7 @@ class PositionController {
   }
 
   /**
-   * GET /api/v1/positions - List all positions (no club filter)
+   * GET /api/v1/positions - List all positions
    */
   async listAll(req, res, next) {
     try {
@@ -36,48 +36,6 @@ class PositionController {
         data: positions,
         meta: {
           count: positions.length,
-        },
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-
-  /**
-   * GET /api/v1/clubs/:clubId/positions
-   */
-  async list(req, res, next) {
-    try {
-      const { clubId } = req.params;
-      const { active_only, limit, offset } = req.query;
-
-      if (!clubId || isNaN(parseInt(clubId))) {
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'Invalid club ID',
-        });
-      }
-
-      // Verify club exists
-      const clubExists = await positionService.clubExists(parseInt(clubId));
-      if (!clubExists) {
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Club with ID ${clubId} not found`,
-        });
-      }
-
-      const positions = await positionService.findByClubId(parseInt(clubId), {
-        activeOnly: active_only !== 'false',
-        limit: parseInt(limit) || 100,
-        offset: parseInt(offset) || 0,
-      });
-
-      res.json({
-        data: positions,
-        meta: {
-          count: positions.length,
-          clubId: parseInt(clubId),
         },
       });
     } catch (err) {
@@ -181,7 +139,7 @@ class PositionController {
       }
 
       // Check election status
-      const canCreate = await positionService.canModify(null, null, parseInt(constituencyId));
+      const canCreate = await positionService.canModify(null, parseInt(constituencyId));
       if (!canCreate) {
         return res.status(403).json({
           error: 'Forbidden',
@@ -234,88 +192,6 @@ class PositionController {
 
       res.json({ data: position });
     } catch (err) {
-      next(err);
-    }
-  }
-
-  /**
-   * POST /api/v1/clubs/:clubId/positions
-   */
-  async create(req, res, next) {
-    try {
-      const { clubId } = req.params;
-      const { name, description, display_order } = req.body;
-
-      if (!clubId || isNaN(parseInt(clubId))) {
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'Invalid club ID',
-        });
-      }
-
-      // Validate required fields
-      if (!name || typeof name !== 'string' || name.trim() === '') {
-        return res.status(400).json({
-          error: 'Validation Error',
-          message: 'name is required and must be a non-empty string',
-        });
-      }
-
-      if (name.length > 255) {
-        return res.status(400).json({
-          error: 'Validation Error',
-          message: 'name must be 255 characters or less',
-        });
-      }
-
-      if (description && description.length > 5000) {
-        return res.status(400).json({
-          error: 'Validation Error',
-          message: 'description must be 5000 characters or less',
-        });
-      }
-
-      if (display_order !== undefined && (typeof display_order !== 'number' || !Number.isInteger(display_order))) {
-        return res.status(400).json({
-          error: 'Validation Error',
-          message: 'display_order must be an integer if provided',
-        });
-      }
-
-      // Verify club exists
-      const clubExists = await positionService.clubExists(parseInt(clubId));
-      if (!clubExists) {
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Club with ID ${clubId} not found`,
-        });
-      }
-
-      // Check election status
-      const canCreate = await positionService.canModify(null, parseInt(clubId));
-      if (!canCreate) {
-        return res.status(403).json({
-          error: 'Forbidden',
-          message: 'Cannot create position when election is OPEN or CLOSED',
-        });
-      }
-
-      const position = await positionService.create({
-        club_id: parseInt(clubId),
-        name: name.trim(),
-        description: description?.trim() || null,
-        display_order: display_order !== undefined ? display_order : 0,
-      });
-
-      res.status(201).json({ data: position });
-    } catch (err) {
-      // Handle duplicate name constraint
-      if (err.code === '23505') {
-        return res.status(409).json({
-          error: 'Conflict',
-          message: `A position with name '${req.body.name}' already exists in this club`,
-        });
-      }
       next(err);
     }
   }
@@ -389,7 +265,7 @@ class PositionController {
       if (err.code === '23505') {
         return res.status(409).json({
           error: 'Conflict',
-          message: `A position with name '${req.body.name}' already exists in this club`,
+          message: `A position with name '${req.body.name}' already exists in this constituency`,
         });
       }
       next(err);

@@ -50,8 +50,9 @@ test.before(async () => {
   await setupTestDatabase(db);
 
   const inserted = await db.query(
-    `INSERT INTO students (external_id, name, email, role, password_hash, password_change_required)
-     VALUES ($1, 'Test Runner', $2, 'STUDENT', $3, FALSE)
+    `INSERT INTO students (external_id, name, email, role, password_hash, password_change_required,
+                           department, year_or_semester, section, voting_eligible, is_active)
+     VALUES ($1, 'Test Runner', $2, 'STUDENT', $3, FALSE, 'BCA', '2nd Year', 'A', TRUE, TRUE)
      RETURNING id`,
     [externalId, `${externalId}@test.local`, hash]
   );
@@ -59,8 +60,9 @@ test.before(async () => {
   globalThis.__TEST_STUDENT_ID__ = externalId;
 
   const attacker = await db.query(
-    `INSERT INTO students (external_id, name, email, role, password_hash, password_change_required)
-     VALUES ($1, 'Attacker', $2, 'STUDENT', $3, FALSE)
+    `INSERT INTO students (external_id, name, email, role, password_hash, password_change_required,
+                           department, year_or_semester, section, voting_eligible, is_active)
+     VALUES ($1, 'Attacker', $2, 'STUDENT', $3, FALSE, 'BCA', '2nd Year', 'B', TRUE, TRUE)
      RETURNING id`,
     [attackerExternalId, `${attackerExternalId}@test.local`, hash]
   );
@@ -224,13 +226,15 @@ test('GET /api/v1/announcements returns list (may be empty)', async () => {
   assert.ok(Array.isArray(data));
 });
 
-test('GET /api/v1/elections/1/clubs returns clubs', async () => {
-  const res = await client.request('GET', '/api/v1/elections/1/clubs', { csrf: false, binding: false });
+test('GET /api/v1/constituencies returns constituencies', async () => {
+  const res = await client.request('GET', '/api/v1/constituencies?election_id=1', { csrf: false, binding: false });
   assert.equal(res.status, 200);
+  assert.ok(Array.isArray(res.json.data));
+  assert.ok(res.json.data.some((c) => c.id === 1));
 });
 
-test('GET /api/v1/clubs/1/positions returns positions', async () => {
-  const res = await client.request('GET', '/api/v1/clubs/1/positions', { csrf: false, binding: false });
+test('GET /api/v1/constituencies/1/positions returns positions', async () => {
+  const res = await client.request('GET', '/api/v1/constituencies/1/positions', { csrf: false, binding: false });
   assert.equal(res.status, 200);
 });
 
@@ -253,7 +257,7 @@ test('cast vote creates a receipt', async () => {
   const c = new TestClient(baseUrl);
   await c.login(externalId, TEST_PW);
   const res = await c.request('POST', '/api/v1/elections/1/votes', {
-    body: { election_id: 1, club_id: 1, position_id: 1, candidate_id: 1 },
+    body: { election_id: 1, constituency_id: 1, position_id: 1, candidate_id: 1 },
   });
   assert.equal(res.status, 201, JSON.stringify(res.json));
   assert.equal(res.json.data.success, true);
@@ -267,7 +271,7 @@ test('duplicate vote for same position is rejected', async () => {
   const c = new TestClient(baseUrl);
   await c.login(externalId, TEST_PW);
   const res = await c.request('POST', '/api/v1/elections/1/votes', {
-    body: { election_id: 1, club_id: 1, position_id: 1, candidate_id: 2 },
+    body: { election_id: 1, constituency_id: 1, position_id: 1, candidate_id: 2 },
   });
   assert.equal(res.status, 409);
   assert.equal(res.json.code, 'ALREADY_VOTED');
@@ -308,7 +312,7 @@ test('impersonation attempt via body student_id is rejected', async () => {
   await c.login(externalId, TEST_PW);
   // Already voted for position 1; try voting for position 2 but with forged student body
   const res = await c.request('POST', '/api/v1/elections/1/votes', {
-    body: { student_id: 9999, election_id: 1, club_id: 1, position_id: 2, candidate_id: 3 },
+    body: { student_id: 9999, election_id: 1, constituency_id: 1, position_id: 2, candidate_id: 3 },
   });
   assert.equal(res.status, 403);
   assert.equal(res.json.code, 'IMPERSONATION_ATTEMPT');
@@ -337,13 +341,14 @@ let crConstituencyId;
 let crPositionId;
 
 test('CR: my-constituency resolves the student seat from their profile', async () => {
-  // Create a 'BCA 2nd Year Section A' constituency in election 1 (auto-creates
-  // its own locked Class Representative position).
+  // Create a 'BCA 1st Year Section B' constituency in election 1 (distinct
+  // from the base BCA 2nd Year A seat, which the suite owns; auto-creates its
+  // own locked Class Representative position).
   const constituency = await constituencyService.create({
     electionId: 1,
     department: 'BCA',
-    year: '2nd Year',
-    section: 'A',
+    year: '1st Year',
+    section: 'B',
   });
   crConstituencyId = constituency.id;
   const pos = await db.query('SELECT id FROM positions WHERE constituency_id = $1', [crConstituencyId]);
@@ -361,7 +366,7 @@ test('CR: my-constituency resolves the student seat from their profile', async (
 
   // Give the test student a matching section profile; attacker stays different.
   await db.query(
-    `UPDATE students SET department = 'BCA', year_or_semester = '2nd Year', section = 'A' WHERE id = $1`,
+    `UPDATE students SET department = 'BCA', year_or_semester = '1st Year', section = 'B' WHERE id = $1`,
     [testStudentId]
   );
   await db.query(
@@ -412,15 +417,15 @@ test('CR: student votes for their own constituency seat', async () => {
   assert.equal(row.rows[0].constituency_id, crConstituencyId);
 });
 
-test('CR: supplying club_id for a CR seat is rejected', async () => {
+test('CR: missing constituency_id is rejected with 400', async () => {
   const externalId = globalThis.__TEST_STUDENT_ID__;
   const c = new TestClient(baseUrl);
   await c.login(externalId, TEST_PW);
   const res = await c.request('POST', '/api/v1/elections/1/votes', {
-    body: { election_id: 1, club_id: 1, position_id: crPositionId, candidate_id: 1 },
+    body: { election_id: 1, position_id: crPositionId, candidate_id: 1 },
   });
   assert.equal(res.status, 400);
-  assert.equal(res.json.code, 'INVALID_BALLOT_SCOPE');
+  assert.match(res.json.message, /constituency_id is required/i);
 });
 
 test('CR: student from another section cannot vote in the constituency', async () => {

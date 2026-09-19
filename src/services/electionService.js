@@ -177,11 +177,11 @@ class ElectionService {
   }
 
   /**
-   * Check if election has dependent data (clubs)
+   * Check if election has dependent data (constituencies)
    */
   async hasDependentData(id) {
     const result = await db.query(
-      'SELECT COUNT(*) as count FROM clubs WHERE election_id = $1',
+      'SELECT COUNT(*) as count FROM constituencies WHERE election_id = $1',
       [id]
     );
     return parseInt(result.rows[0].count) > 0;
@@ -203,39 +203,22 @@ class ElectionService {
 
     const election = electionResult.rows[0];
 
-    // Count clubs
-    const clubsResult = await db.query(
-      'SELECT COUNT(*) as count FROM clubs WHERE election_id = $1 AND is_active = true',
+    // Count constituencies
+    const constituenciesResult = await db.query(
+      'SELECT COUNT(*) as count FROM constituencies WHERE election_id = $1 AND is_active = true',
       [id]
     );
 
-    // Count positions across all clubs
+    // Count positional seats (CR seats live on constituencies)
     const positionsResult = await db.query(
-      `SELECT COUNT(*) as count FROM positions p
-       JOIN clubs c ON p.club_id = c.id
-       WHERE c.election_id = $1 AND p.is_active = true`,
-      [id]
-    );
-
-    // Count constituency (CR) positions
-    const crPositionsResult = await db.query(
       `SELECT COUNT(*) as count FROM positions p
        JOIN constituencies c ON p.constituency_id = c.id
        WHERE c.election_id = $1 AND p.is_active = true`,
       [id]
     );
 
-    // Count candidates across all positions (club-backed)
+    // Count candidates across all positions
     const candidatesResult = await db.query(
-      `SELECT COUNT(*) as count FROM candidates c
-       JOIN positions p ON c.position_id = p.id
-       JOIN clubs cl ON p.club_id = cl.id
-       WHERE cl.election_id = $1 AND c.is_active = true`,
-      [id]
-    );
-
-    // Count candidates across all positions (constituency-backed)
-    const crCandidatesResult = await db.query(
       `SELECT COUNT(*) as count FROM candidates c
        JOIN positions p ON c.position_id = p.id
        JOIN constituencies cl ON p.constituency_id = cl.id
@@ -249,17 +232,17 @@ class ElectionService {
       [id]
     );
 
-    const clubCount = parseInt(clubsResult.rows[0].count);
-    const positionCount = parseInt(positionsResult.rows[0].count) + parseInt(crPositionsResult.rows[0].count);
-    const candidateCount = parseInt(candidatesResult.rows[0].count) + parseInt(crCandidatesResult.rows[0].count);
+    const constituencyCount = parseInt(constituenciesResult.rows[0].count);
+    const positionCount = parseInt(positionsResult.rows[0].count);
+    const candidateCount = parseInt(candidatesResult.rows[0].count);
     const authorizedCount = parseInt(authResult.rows[0].count);
 
     // Determine readiness
     const checks = {
-      hasClubs: {
-        status: clubCount > 0 ? 'pass' : 'warn',
-        message: clubCount > 0 ? 'Has clubs' : 'No clubs configured (Class Representative elections can use constituencies instead)',
-        count: clubCount,
+      hasConstituencies: {
+        status: constituencyCount > 0 ? 'pass' : 'warn',
+        message: constituencyCount > 0 ? 'Has constituencies' : 'No constituencies configured',
+        count: constituencyCount,
       },
       hasPositions: {
         status: positionCount > 0 ? 'pass' : 'fail',
@@ -344,12 +327,6 @@ class ElectionService {
       ? Math.round((totalVotes / totalEligible) * 10000) / 100
       : 0;
 
-    // Get clubs for this election
-    const clubsResult = await db.query(
-      `SELECT id, name FROM clubs WHERE election_id = $1 AND is_active = true ORDER BY display_order`,
-      [id]
-    );
-
     // Get constituencies (CR seats) for this election
     const constituenciesResult = await db.query(
       `SELECT id, name FROM constituencies
@@ -358,27 +335,8 @@ class ElectionService {
       [id]
     );
 
-    // Get positions and candidates with vote counts (club-backed)
-    const positionsResult = await db.query(
-      `SELECT
-         p.id as position_id,
-         p.name as position_name,
-         p.club_id,
-         cand.id as candidate_id,
-         cand.name as candidate_name,
-         COUNT(v.id) as vote_count
-       FROM positions p
-       JOIN clubs c ON c.id = p.club_id
-       JOIN candidates cand ON cand.position_id = p.id AND cand.is_active = true
-       LEFT JOIN votes v ON v.position_id = p.id AND v.candidate_id = cand.id
-       WHERE c.election_id = $1 AND p.is_active = true
-       GROUP BY p.id, p.name, p.club_id, cand.id, cand.name
-       ORDER BY p.display_order, cand.display_order`,
-      [id]
-    );
-
     // Get positions and candidates with vote counts (constituency-backed)
-    const crPositionsResult = await db.query(
+    const positionsResult = await db.query(
       `SELECT
          p.id as position_id,
          p.name as position_name,
@@ -447,17 +405,8 @@ class ElectionService {
       return Object.values(positionGroups);
     };
 
-    const clubs = clubsResult.rows.map(club => {
-      const clubPositions = positionsResult.rows.filter(p => p.club_id === club.id);
-      return {
-        clubId: club.id,
-        clubName: club.name,
-        positions: formatPositions(clubPositions),
-      };
-    });
-
     const constituencies = constituenciesResult.rows.map(c => {
-      const cPositions = crPositionsResult.rows.filter(p => p.constituency_id === c.id);
+      const cPositions = positionsResult.rows.filter(p => p.constituency_id === c.id);
       return {
         constituencyId: c.id,
         constituencyName: c.name,
@@ -473,7 +422,6 @@ class ElectionService {
       totalEligible,
       totalVotes,
       participation,
-      clubs,
       constituencies,
     };
   }

@@ -83,7 +83,7 @@ class AuthorizationController {
   async create(req, res, next) {
     try {
       const { electionId } = req.params;
-      const { student_id, club_id, is_authorized = true, expires_at } = req.body;
+      const { student_id, is_authorized = true, expires_at } = req.body;
 
       // Validate election ID
       if (!electionId || isNaN(parseInt(electionId))) {
@@ -105,14 +105,6 @@ class AuthorizationController {
         return res.status(400).json({
           error: 'Validation Error',
           message: 'student_id must be a valid integer',
-        });
-      }
-
-      // Validate club_id if provided
-      if (club_id !== undefined && club_id !== null && isNaN(parseInt(club_id))) {
-        return res.status(400).json({
-          error: 'Validation Error',
-          message: 'club_id must be a valid integer if provided',
         });
       }
 
@@ -152,23 +144,6 @@ class AuthorizationController {
         });
       }
 
-      // Check club belongs to election if provided
-      if (club_id) {
-        const club = await authService.getClubById(parseInt(club_id));
-        if (!club) {
-          return res.status(404).json({
-            error: 'Not Found',
-            message: `Club with ID ${club_id} not found`,
-          });
-        }
-        if (club.election_id !== parseInt(electionId)) {
-          return res.status(400).json({
-            error: 'Bad Request',
-            message: 'Club does not belong to this election',
-          });
-        }
-      }
-
       // Check election state allows authorization
       const canCreate = await authService.canCreate(parseInt(electionId));
       if (!canCreate.canCreate) {
@@ -181,13 +156,12 @@ class AuthorizationController {
       // Check for existing authorization
       const existing = await authService.exists(
         parseInt(student_id),
-        parseInt(electionId),
-        club_id ? parseInt(club_id) : null
+        parseInt(electionId)
       );
       if (existing) {
         return res.status(409).json({
           error: 'Conflict',
-          message: 'Authorization already exists for this student/election/club',
+          message: 'Authorization already exists for this student/election',
         });
       }
 
@@ -195,7 +169,6 @@ class AuthorizationController {
       const authorization = await authService.create({
         student_id: parseInt(student_id),
         election_id: parseInt(electionId),
-        club_id: club_id ? parseInt(club_id) : null,
         is_authorized: is_authorized !== false,
         expires_at: expires_at || null,
       });
@@ -206,7 +179,7 @@ class AuthorizationController {
       if (err.code === '23505') {
         return res.status(409).json({
           error: 'Conflict',
-          message: 'Authorization already exists for this student/election/club',
+          message: 'Authorization already exists for this student/election',
         });
       }
       // Handle foreign key violations

@@ -2,7 +2,7 @@
  * Constituency Controller
  * HTTP request handling for Class Representative (CR) constituencies.
  *
- * Security model mirrors clubs/positions:
+ * Security model:
  *  - Reads are public (ballot data).
  *  - Writes require an authenticated ADMIN session + CSRF, and the owning
  *    election must be DRAFT/SCHEDULED.

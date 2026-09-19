@@ -2,11 +2,9 @@
  * Candidate Service
  * Business logic for candidate management.
  *
- * Two data sources:
- * 1. candidates table - legacy club election candidates (internal)
- * 2. candidate_applications table with status='approved' - CR/public candidates
- *
- * The public /api/v1/candidates endpoint uses source 2 (approved applications).
+ * The public /api/v1/candidates endpoint uses candidate_applications with
+ * status='approved'. The legacy `candidates` table backs the ballot rows for
+ * constituency (Class Representative) positions.
  */
 
 const db = require('../db');
@@ -163,34 +161,8 @@ class CandidateService {
   }
 
   // =============================================
-  // LEGACY METHODS (for club elections internal use)
+  // LEGACY METHODS (for the candidates ballot table)
   // =============================================
-
-  /**
-   * Find all candidates (legacy - club elections)
-   */
-  async findAll(options = {}) {
-    const { activeOnly = true, limit = 100, offset = 0 } = options;
-
-    let query = `SELECT c.*,
-                        p.name AS position_name,
-                        cl.name AS club_name
-                 FROM candidates c
-                 JOIN positions p ON c.position_id = p.id
-                 JOIN clubs cl ON p.club_id = cl.id
-                 WHERE 1=1`;
-    const params = [];
-
-    if (activeOnly) {
-      query += ' AND c.is_active = true';
-    }
-
-    query += ' ORDER BY c.id LIMIT $1 OFFSET $2';
-    params.push(limit, offset);
-
-    const result = await db.query(query, params);
-    return result.rows;
-  }
 
   /**
    * Find all candidates for a position
@@ -224,34 +196,13 @@ class CandidateService {
   }
 
   /**
-   * Find single candidate by ID
-   */
-  async findById(id) {
-    const result = await db.query(`
-      SELECT c.*,
-             p.name AS position_name,
-             p.id AS position_id,
-             cl.name AS club_name,
-             e.id AS election_id,
-             e.name AS election_name
-      FROM candidates c
-      JOIN positions p ON c.position_id = p.id
-      JOIN clubs cl ON p.club_id = cl.id
-      JOIN elections e ON cl.election_id = e.id
-      WHERE c.id = $1
-    `, [id]);
-
-    return result.rows[0] || null;
-  }
-
-  /**
    * Get election status by position ID
    */
   async getElectionStatusByPositionId(positionId) {
     const result = await db.query(
       `SELECT e.status FROM elections e
-       JOIN clubs c ON c.election_id = e.id
-       JOIN positions p ON p.club_id = c.id
+       JOIN constituencies ct ON ct.election_id = e.id
+       JOIN positions p ON p.constituency_id = ct.id
        WHERE p.id = $1`,
       [positionId]
     );

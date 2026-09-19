@@ -22,7 +22,7 @@ class VoteController {
   async submitVote(req, res, next) {
     try {
       const { electionId } = req.params;
-      const { club_id, constituency_id, position_id, candidate_id, student_id: bodyStudentId } = req.body;
+      const { constituency_id, position_id, candidate_id, student_id: bodyStudentId } = req.body;
 
       // SECURITY: Get student identity from authenticated session ONLY
       // NEVER trust student_id from request body for production
@@ -53,9 +53,8 @@ class VoteController {
       // Use authenticated identity
       const studentId = authenticatedStudentId;
 
-      // Validation: required fields. Either club_id (club position) or
-      // constituency_id (CR position) is required; the vote service resolves
-      // which scope a position demands.
+      // Validation: required fields. constituency_id (CR seat) is required;
+      // the vote service verifies the position is constituency-backed.
       if (!position_id || !candidate_id) {
         return res.status(400).json({
           error: 'Bad Request',
@@ -63,16 +62,15 @@ class VoteController {
         });
       }
 
-      if ((!club_id && !constituency_id)) {
+      if (!constituency_id) {
         return res.status(400).json({
           error: 'Bad Request',
-          message: 'Either club_id or constituency_id is required.',
+          message: 'constituency_id is required.',
         });
       }
 
       // Parse IDs
-      const clubId = club_id ? parseToInt(club_id) : null;
-      const constituencyId = constituency_id ? parseToInt(constituency_id) : null;
+      const constituencyId = parseToInt(constituency_id);
       const positionId = parseToInt(position_id);
       const candidateId = parseToInt(candidate_id);
       const electionIdInt = parseToInt(electionId);
@@ -89,7 +87,6 @@ class VoteController {
       const result = await voteService.castVote({
         studentId,
         electionId: electionIdInt,
-        clubId,
         constituencyId,
         positionId,
         candidateId,

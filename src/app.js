@@ -6,7 +6,6 @@ const healthRoutes = require('./routes/health');
 const studentRoutes = require('./routes/students');
 const electionRoutes = require('./routes/elections');
 const announcementRoutes = require('./routes/announcements');
-const clubRoutes = require('./routes/clubs');
 const positionRoutes = require('./routes/positions');
 const candidateRoutes = require('./routes/candidates');
 const candidateApplicationRoutes = require('./routes/candidateApplications');
@@ -22,7 +21,6 @@ const cadRoutes = require('./routes/cad');
 const adminStats = require('./controllers/adminStats');
 const adminLiveResults = require('./controllers/adminLiveResults');
 const adminAuditLogs = require('./controllers/adminAuditLogs');
-const clubController = require('./controllers/clubController');
 const positionController = require('./controllers/positionController');
 const candidateController = require('./controllers/candidateController');
 const studentController = require('./controllers/studentController');
@@ -30,7 +28,6 @@ const authController = require('./controllers/authorizationController');
 const voteController = require('./controllers/voteController');
 const adminStudents = require('./routes/adminStudents');
 const adminElections = require('./routes/adminElections');
-const adminClubs = require('./routes/adminClubs');
 const adminPositions = require('./routes/adminPositions');
 const adminCandidates = require('./routes/adminCandidates');
 const adminAuthorization = require('./routes/adminAuthorization');
@@ -182,12 +179,6 @@ app.use('/api/v1/elections', electionRoutes);
 // Public announcements (published only)
 app.use('/api/v1/announcements', announcementRoutes);
 
-// Public election clubs
-app.get('/api/v1/elections/:electionId/clubs', clubController.list.bind(clubController));
-
-// Club-position relationships (public read)
-app.get('/api/v1/clubs/:clubId/positions', positionController.list.bind(positionController));
-
 // Position-candidate relationships (public read)
 app.get('/api/v1/positions/:positionId/candidates', candidateController.list.bind(candidateController));
 
@@ -258,7 +249,6 @@ app.patch('/api/v1/students/profile', requireAuth, studentController.updateProfi
 app.use('/api/v1/admin/whitelist', requireAdmin, require('./routes/adminWhitelist'));
 app.use('/api/v1/admin/students', requireAdmin, adminStudents);
 app.use('/api/v1/admin/elections', requireAdmin, adminElections);
-app.use('/api/v1/admin/clubs', requireAdmin, adminClubs);
 app.use('/api/v1/admin/positions', requireAdmin, adminPositions);
 app.use('/api/v1/admin/constituencies', requireAdmin, adminConstituencyRoutes);
 app.use('/api/v1/admin/candidates', requireAdmin, adminCandidates);

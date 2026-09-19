@@ -41,12 +41,10 @@ class AuthorizationService {
     const result = await db.query(
       `SELECT va.*,
               s.external_id, s.name as student_name, s.email as student_email,
-              e.name as election_name, e.status as election_status,
-              c.name as club_name
+              e.name as election_name, e.status as election_status
        FROM voter_authorizations va
        JOIN students s ON va.student_id = s.id
        JOIN elections e ON va.election_id = e.id
-       LEFT JOIN clubs c ON va.club_id = c.id
        WHERE va.id = $1`,
       [id]
     );
@@ -65,37 +63,29 @@ class AuthorizationService {
   }
 
   /**
-   * Check if authorization exists for student/election/club
+   * Check if an authorization exists for student/election
    */
-  async exists(studentId, electionId, clubId = null) {
-    let query = 'SELECT id FROM voter_authorizations WHERE student_id = $1 AND election_id = $2';
-    const params = [studentId, electionId];
-
-    if (clubId) {
-      query += ' AND club_id = $3';
-      params.push(clubId);
-    } else {
-      query += ' AND club_id IS NULL';
-    }
-
-    const result = await db.query(query, params);
+  async exists(studentId, electionId) {
+    const result = await db.query(
+      'SELECT id FROM voter_authorizations WHERE student_id = $1 AND election_id = $2',
+      [studentId, electionId]
+    );
     return result.rows.length > 0;
   }
 
   /**
-   * Create a new authorization
+   * Create a new authorization (election-wide)
    */
   async create(data) {
-    const { student_id, election_id, club_id, is_authorized = true, expires_at } = data;
+    const { student_id, election_id, is_authorized = true, expires_at } = data;
 
     const result = await db.query(
-      `INSERT INTO voter_authorizations (student_id, election_id, club_id, is_authorized, expires_at)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO voter_authorizations (student_id, election_id, is_authorized, expires_at)
+       VALUES ($1, $2, $3, $4)
        RETURNING *`,
       [
         student_id,
         election_id,
-        club_id || null,
         is_authorized,
         expires_at || null,
       ]
@@ -215,29 +205,7 @@ class AuthorizationService {
     return result.rows[0] || null;
   }
 
-  /**
-   * Get club by ID
-   */
-  async getClubById(clubId) {
-    const result = await db.query(
-      'SELECT * FROM clubs WHERE id = $1',
-      [clubId]
-    );
-    return result.rows[0] || null;
-  }
-
-  /**
-   * Check if club exists and belongs to election
-   */
-  async clubExistsInElection(clubId, electionId) {
-    const result = await db.query(
-      'SELECT id FROM clubs WHERE id = $1 AND election_id = $2 AND is_active = true',
-      [clubId, electionId]
-    );
-    return result.rows.length > 0;
-  }
-
-  /**
+/**
    * Get election status for an authorization
    */
   async getAuthorizationElectionStatus(authorizationId) {
@@ -363,11 +331,10 @@ class AuthorizationService {
       };
     }
 
-    // Check for active authorization
+    // Check for active authorization (election-wide — the only kind now)
     const auth = await db.query(
-      `SELECT va.*, c.name as club_name
+      `SELECT va.id
        FROM voter_authorizations va
-       LEFT JOIN clubs c ON va.club_id = c.id
        WHERE va.student_id = $1
          AND va.election_id = $2
          AND va.is_authorized = true
@@ -385,13 +352,6 @@ class AuthorizationService {
       };
     }
 
-    // Build authorized clubs list
-    const authorizedClubs = auth.rows
-      .filter(a => a.club_id !== null)
-      .map(a => ({ id: a.club_id, name: a.club_name }));
-
-    const hasFullAccess = auth.rows.some(a => a.club_id === null);
-
     return {
       eligible: true,
       reason: 'AUTHORIZED',
@@ -399,8 +359,8 @@ class AuthorizationService {
       student_id: studentId,
       election_id: electionId,
       election_status: election.rows[0].status,
-      authorized_clubs: authorizedClubs,
-      full_access: hasFullAccess,
+      authorized_clubs: [],
+      full_access: true,
     };
   }
 }

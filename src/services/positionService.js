@@ -23,7 +23,7 @@ class PositionService {
   }
 
   /**
-   * Find all positions (no club filter)
+   * Find all positions
    */
   async findAll(options = {}) {
     const { activeOnly = true, limit = 100, offset = 0 } = options;
@@ -36,26 +36,6 @@ class PositionService {
     }
 
     query += ' ORDER BY display_order, id LIMIT $1 OFFSET $2';
-    params.push(limit, offset);
-
-    const result = await db.query(query, params);
-    return result.rows;
-  }
-
-  /**
-   * Find all positions for a club
-   */
-  async findByClubId(clubId, options = {}) {
-    const { activeOnly = true, limit = 100, offset = 0 } = options;
-
-    let query = 'SELECT * FROM positions WHERE club_id = $1';
-    const params = [clubId];
-
-    if (activeOnly) {
-      query += ' AND is_active = true';
-    }
-
-    query += ' ORDER BY display_order, id LIMIT $2 OFFSET $3';
     params.push(limit, offset);
 
     const result = await db.query(query, params);
@@ -94,25 +74,24 @@ class PositionService {
   }
 
   /**
-   * Create a new position (club OR constituency backed)
+   * Create a new position (constituency-backed — Class Representative seats)
    */
   async create(data) {
-    const { club_id, constituency_id, name, description, display_order } = data;
+    const { constituency_id, name, description, display_order } = data;
 
-    if ((club_id === undefined || club_id === null) === (constituency_id === undefined || constituency_id === null)) {
-      const error = new Error('Exactly one of club_id or constituency_id is required.');
+    if (constituency_id === undefined || constituency_id === null) {
+      const error = new Error('constituency_id is required.');
       error.code = 'VALIDATION';
       error.status = 400;
       throw error;
     }
 
     const result = await db.query(
-      `INSERT INTO positions (club_id, constituency_id, name, description, display_order)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO positions (constituency_id, name, description, display_order)
+       VALUES ($1, $2, $3, $4)
        RETURNING *`,
       [
-        club_id !== undefined ? club_id : null,
-        constituency_id !== undefined ? constituency_id : null,
+        constituency_id,
         name.trim(),
         description?.trim() || null,
         display_order !== undefined ? display_order : 0,
@@ -162,41 +141,15 @@ class PositionService {
   }
 
   /**
-   * Check if club exists
-   */
-  async clubExists(clubId) {
-    const result = await db.query(
-      'SELECT id FROM clubs WHERE id = $1',
-      [clubId]
-    );
-    return result.rows.length > 0;
-  }
-
-  /**
-   * Get election status for a position (club OR constituency backed)
+   * Get election status for a position (constituency-backed)
    */
   async getElectionStatus(positionId) {
     const result = await db.query(
       `SELECT e.status FROM elections e
-       LEFT JOIN clubs c ON c.election_id = e.id
-       LEFT JOIN positions pclub ON pclub.club_id = c.id
-       LEFT JOIN constituencies ct ON ct.election_id = e.id
-       LEFT JOIN positions pct ON pct.constituency_id = ct.id
-       WHERE pclub.id = $1 OR pct.id = $1`,
+       JOIN constituencies ct ON ct.election_id = e.id
+       JOIN positions p ON p.constituency_id = ct.id
+       WHERE p.id = $1`,
       [positionId]
-    );
-    return result.rows[0]?.status || null;
-  }
-
-  /**
-   * Get election status by club ID
-   */
-  async getElectionStatusByClubId(clubId) {
-    const result = await db.query(
-      `SELECT e.status FROM elections e
-       JOIN clubs c ON c.election_id = e.id
-       WHERE c.id = $1`,
-      [clubId]
     );
     return result.rows[0]?.status || null;
   }
@@ -217,12 +170,10 @@ class PositionService {
   /**
    * Check if position can be modified based on election state
    */
-  async canModify(positionId, clubId, constituencyId) {
+  async canModify(positionId, constituencyId) {
     let status;
     if (positionId) {
       status = await this.getElectionStatus(positionId);
-    } else if (clubId) {
-      status = await this.getElectionStatusByClubId(clubId);
     } else if (constituencyId) {
       status = await this.getElectionStatusByConstituencyId(constituencyId);
     }
