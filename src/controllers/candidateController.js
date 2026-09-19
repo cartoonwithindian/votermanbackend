@@ -25,10 +25,20 @@ class CandidateController {
         limit,
         offset,
         gender,      // 'Male', 'Female', 'Other'
-        department,
-        year,
-        section,
       } = req.query;
+
+      // Students always see only their own cohort's candidates. When an
+      // authenticated student with a complete class on file (department,
+      // year, section) hits this endpoint, ignore any client-supplied
+      // department/year/section and scope to that exact class — a student can
+      // never browse other courses, other years, or other sections here.
+      // Unauthenticated consumers (and authed rows missing class data) keep
+      // the previous optional filters.
+      const u = req.user;
+      const hasOwnClass = Boolean(u && u.department && u.year && u.section);
+      const department = hasOwnClass ? u.department : req.query.department;
+      const year = hasOwnClass ? u.year : req.query.year;
+      const section = hasOwnClass ? u.section : req.query.section;
 
       const candidates = await candidateService.findApproved({
         activeOnly: active_only !== 'false',
