@@ -82,7 +82,7 @@ router.get('/elections', async (req, res) => {
   try {
     const rows = await db.query(
       `SELECT e.id, e.name, e.status, e.start_time, e.end_time,
-              (SELECT COUNT(*)::int FROM clubs c WHERE c.election_id = e.id AND c.is_active) AS clubs,
+              (SELECT COUNT(*)::int FROM constituencies c WHERE c.election_id = e.id AND c.is_active) AS constituencies,
               (SELECT COUNT(*)::int FROM votes v WHERE v.election_id = e.id) AS votes_cast,
               (SELECT COUNT(DISTINCT student_id)::int FROM voter_authorizations va
                 WHERE va.election_id = e.id AND va.is_authorized) AS eligible_voters
