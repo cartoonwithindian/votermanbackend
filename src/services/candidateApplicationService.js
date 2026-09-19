@@ -22,7 +22,6 @@ class CandidateApplicationService {
       semester,
       section,
       positionId,
-      nominationClub,
       contestingPosition,
       email,
       phone,
@@ -60,7 +59,7 @@ class CandidateApplicationService {
     }
 
     // Verify position exists ONLY when one was supplied (position_id is now
-    // optional; nomination_club + contesting_position carry the real data).
+    // optional; contesting_position carries the real label).
     if (positionId) {
       const positionCheck = await db.query(
         'SELECT id, name FROM positions WHERE id = $1',
@@ -94,14 +93,14 @@ class CandidateApplicationService {
     const result = await db.query(
       `INSERT INTO candidate_applications (
         student_id, full_name, enrollment_number, department, year, semester, section,
-        position_id, nomination_club, contesting_position, email, phone, profile_photo_url, bio, manifesto,
+        position_id, contesting_position, email, phone, profile_photo_url, bio, manifesto,
         age, date_of_birth, gender, aadhar_number, category, election_id,
         status, submitted_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, 'under_review', NOW())
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, 'under_review', NOW())
       RETURNING *`,
       [
         studentId, fullName, enrollmentNumber, department, year, semester || null, section || null,
-        positionId || null, nominationClub || null, contestingPosition || null,
+        positionId || null, contestingPosition || null,
         email, phone, profilePhotoUrl || null, bio || null, manifesto || null,
         age || null, dateOfBirth || null, gender || null, aadharNumber || null,
         appCategory, electionId ? parseInt(electionId) : null,
@@ -882,7 +881,6 @@ class CandidateApplicationService {
       section: row.section,
       positionId: row.position_id,
       positionName: row.position_name,
-      nominationClub: row.nomination_club || null,
       contestingPosition: row.contesting_position || null,
       // Compat: UI components read `position`; prefer the new text field
       position: row.contesting_position || row.position_name || null,
@@ -895,7 +893,7 @@ class CandidateApplicationService {
       dateOfBirth: row.date_of_birth,
       gender: row.gender,
       aadharNumber: row.aadhar_number,
-      category: row.category || 'CLUB',
+      category: row.category || 'CR',
       electionId: row.election_id || null,
       status: row.status,
       rejectionReason: row.rejection_reason,
