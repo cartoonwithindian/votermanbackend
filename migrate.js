@@ -10,8 +10,13 @@ const { Pool } = require('pg');
 // Load environment - Railway provides env vars directly, .env is for local dev
 require('dotenv').config();
 
-// Validate required environment variables
+// Validate required environment variables — allow MongoDB-only (Atlas M10) without Postgres
 if (!process.env.DATABASE_URL) {
+  if (process.env.MONGODB_URI) {
+    console.log('MONGODB_URI set — skipping Postgres migrations (MongoDB-only mode)');
+    console.log('Atlas: ' + process.env.MONGODB_URI.replace(/:[^@]*@/, ':***@'));
+    process.exit(0);
+  }
   console.error('ERROR: DATABASE_URL environment variable is not set!');
   console.error('Please set DATABASE_URL to your PostgreSQL connection string.');
   process.exit(1);

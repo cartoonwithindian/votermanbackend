@@ -26,16 +26,43 @@ const getPoolConfig = () => {
   };
 };
 
-// Create the connection pool
-const pool = new Pool(getPoolConfig());
+// Create the connection pool — allow MongoDB-only (Atlas M10) without Postgres
+let pool;
+let isMongoOnly = false;
+if (!process.env.DATABASE_URL && process.env.MONGODB_URI) {
+  console.log('DATABASE_URL missing — running in MongoDB-only mode (Atlas M10) — Postgres pool disabled');
+  isMongoOnly = true;
+  // Dummy pool that never connects; queries will be no-ops and log
+  pool = {
+    query: async () => { throw new Error('Postgres not configured — use MONGODB_URI'); },
+    on: () => {},
+    end: async () => {},
+    connect: async () => { throw new Error('Postgres not configured'); },
+  };
+} else {
+  pool = new Pool(getPoolConfig());
+  // Handle pool errors
+  pool.on('error', (err) => {
+    console.error('Unexpected error on idle database client:', err.message);
+  });
+}
 
-// Handle pool errors
-pool.on('error', (err) => {
-  console.error('Unexpected error on idle database client:', err.message);
-});
-
-// Health check function - executes SELECT 1
+// Health check function - executes SELECT 1 (or MongoDB ping when Postgres disabled)
 const healthCheck = async () => {
+  if (isMongoOnly) {
+    const start = Date.now();
+    try {
+      const { MongoClient } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI);
+      await client.connect();
+      await client.db(process.env.MONGODB_DB || 'voteweb').command({ ping: 1 });
+      await client.close();
+      const duration = Date.now() - start;
+      return { status: 'ok', responseTime: `${duration}ms`, timestamp: new Date().toISOString(), database: 'mongodb' };
+    } catch (e) {
+      return { status: 'error', message: e.message, timestamp: new Date().toISOString() };
+    }
+  }
   const start = Date.now();
   const result = await pool.query('SELECT 1 AS health_check');
   const duration = Date.now() - start;

@@ -139,11 +139,39 @@ app.get('/api/health', (req, res) => {
 app.get('/api/health/db', async (req, res) => {
   const db = require('./db');
   const start = Date.now();
+  // MongoDB-only (Atlas M10) — check Mongo ping when Postgres not configured
+  if (!process.env.DATABASE_URL && process.env.MONGODB_URI) {
+    try {
+      const { MongoClient } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI);
+      await client.connect();
+      await client.db(process.env.MONGODB_DB || 'voteweb').command({ ping: 1 });
+      await client.close();
+      res.json({
+        status: 'ok',
+        database: 'connected',
+        backend: 'mongodb',
+        responseTime: `${Date.now() - start}ms`,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    } catch (err) {
+      res.status(503).json({
+        status: 'error',
+        database: 'disconnected',
+        backend: 'mongodb',
+        message: 'MongoDB connection failed: ' + err.message,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+  }
   try {
     await db.query('SELECT 1');
     res.json({
       status: 'ok',
       database: 'connected',
+      backend: 'postgres',
       responseTime: `${Date.now() - start}ms`,
       timestamp: new Date().toISOString(),
     });
@@ -151,6 +179,7 @@ app.get('/api/health/db', async (req, res) => {
     res.status(503).json({
       status: 'error',
       database: 'disconnected',
+      backend: 'postgres',
       message: 'Database connection failed',
       timestamp: new Date().toISOString(),
     });
