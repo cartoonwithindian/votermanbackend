@@ -4,6 +4,7 @@
  */
 
 const db = require('../db');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 /**
  * Remove sensitive fields from student record
@@ -40,6 +41,36 @@ class StudentService {
   `;
 
   async findAll(options = {}) {
+    if (isMongoOnly) {
+      const { MongoClient } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
+      await client.connect();
+      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const filter = {};
+      if (options.activeOnly) filter.isActive = true;
+      const rows = await col.find(filter).sort({ _id: 1 }).skip(options.offset || 0).limit(options.limit || 100).toArray();
+      await client.close();
+      // Map Mongo docs to Postgres-like shape for sanitize
+      return sanitizeStudents(rows.map(r => ({
+        id: r._id || r.postgresId,
+        external_id: r.externalId,
+        name: r.name,
+        email: r.email,
+        role: r.role,
+        department: r.department,
+        year_or_semester: r.year,
+        section: r.section,
+        is_active: r.isActive,
+        voting_eligible: r.votingEligible,
+        password_hash: r.passwordHash,
+        mfa_enabled: r.mfaEnabled,
+        roll_number: r.rollNumber,
+        mobile_number: r.mobileNumber,
+        profile_image_url: r.profileImageUrl,
+        created_at: r.createdAt,
+        updated_at: r.updatedAt,
+      })));
+    }
     const { activeOnly = false, limit = 100, offset = 0 } = options;
 
     let query = `SELECT s.*,
