@@ -14,7 +14,7 @@ let client = null;
 let clientPromise = null;
 
 function getMongoUri() {
-  return process.env.MONGODB_URI || process.env.ATLAS_URI || null;
+  return process.env.MONGODB_URI || process.env.MONGODB_URL || process.env.ATLAS_URI || process.env.ATLAS_URL || null;
 }
 
 function getDbName() {
