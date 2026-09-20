@@ -10,6 +10,9 @@ const router = express.Router();
 const db = require('../db');
 const { csrfProtection } = require('../middleware/csrfProtection');
 
+// MongoDB-only (Atlas M10) — no Postgres students table; whitelist lives in Postgres
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
@@ -17,6 +20,78 @@ function isValidEmail(email) {
 // GET /api/v1/admin/whitelist
 // Query: search, department, year_or_semester, section, is_registered (true/false), page, limit
 router.get('/', async (req, res) => {
+  // Mongo-only (Atlas M10) — students/whitelist lives in Postgres; return empty gracefully to avoid 500
+  if (isMongoOnly) {
+    try {
+      const { MongoClient } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
+      await client.connect();
+      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      // Attempt to serve whitelist from Mongo students collection (paginated, filtered)
+      const {
+        search = '',
+        department,
+        year_or_semester,
+        section,
+        is_registered,
+        page = '1',
+        limit = '50',
+      } = req.query;
+      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+      const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+      const filter = {};
+      if (search && String(search).trim() !== '') {
+        const term = String(search).trim();
+        const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        filter.$or = [
+          { name: regex },
+          { email: regex },
+          { officialEmail: regex },
+          { currentLoginEmail: regex },
+          { externalId: regex },
+          { studentId: regex },
+        ];
+      }
+      if (department && String(department).trim() !== '') filter.department = String(department).trim().toUpperCase();
+      if (year_or_semester && String(year_or_semester).trim() !== '') filter.year = String(year_or_semester).trim();
+      if (section && String(section).trim() !== '') filter.section = String(section).trim().toUpperCase();
+      if (is_registered === 'true') filter.passwordHash = { $ne: null };
+      else if (is_registered === 'false') filter.$or ? filter.passwordHash = null : (filter.passwordHash = null);
+      const total = await col.countDocuments(filter);
+      const rows = await col.find(filter).sort({ department: 1, year: 1, section: 1, name: 1 }).skip((pageNum - 1) * limitNum).limit(limitNum).toArray();
+      await client.close();
+      // Map Mongo docs to Postgres-like response shape
+      const whitelist = rows.map(r => ({
+        id: r._id,
+        external_id: r.externalId,
+        student_id: r.studentId,
+        name: r.name,
+        email: r.email,
+        official_email: r.officialEmail,
+        current_login_email: r.currentLoginEmail,
+        department: r.department,
+        year_or_semester: r.year,
+        section: r.section,
+        is_active: r.isActive,
+        voting_eligible: r.votingEligible,
+        role: r.role,
+        username: r.username,
+        mobile_number: r.mobileNumber,
+        enrollment_number: r.enrollmentNumber,
+        is_registered: !!r.passwordHash,
+        created_at: r.createdAt,
+        updated_at: r.updatedAt,
+      }));
+      return res.json({ data: { whitelist, pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) } } });
+    } catch (e) {
+      console.error('admin whitelist mongo fallback:', e.message);
+      // Mongo not reachable or collection missing — return empty list (never 500)
+      const { page = '1', limit = '50' } = req.query;
+      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+      const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+      return res.json({ data: { whitelist: [], pagination: { page: pageNum, limit: limitNum, total: 0, totalPages: 0 } } });
+    }
+  }
   try {
     const {
       search = '',
@@ -105,6 +180,50 @@ router.get('/', async (req, res) => {
 
 // GET /api/v1/admin/whitelist/:id
 router.get('/:id', async (req, res) => {
+  if (isMongoOnly) {
+    try {
+      const { MongoClient, ObjectId } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
+      await client.connect();
+      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const rawId = req.params.id;
+      let doc = null;
+      // Try ObjectId lookup, then _id string, then numeric postgresId
+      try { doc = await col.findOne({ _id: new ObjectId(rawId) }); } catch {}
+      if (!doc) {
+        try { doc = await col.findOne({ _id: rawId }); } catch {}
+      }
+      if (!doc && !isNaN(parseInt(rawId, 10))) {
+        doc = await col.findOne({ postgresId: parseInt(rawId, 10) });
+      }
+      await client.close();
+      if (!doc) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+      const mapped = {
+        id: doc._id,
+        external_id: doc.externalId,
+        student_id: doc.studentId,
+        name: doc.name,
+        email: doc.email,
+        official_email: doc.officialEmail,
+        current_login_email: doc.currentLoginEmail,
+        department: doc.department,
+        year_or_semester: doc.year,
+        section: doc.section,
+        is_active: doc.isActive,
+        voting_eligible: doc.votingEligible,
+        role: doc.role,
+        username: doc.username,
+        mobile_number: doc.mobileNumber,
+        enrollment_number: doc.enrollmentNumber,
+        is_registered: !!doc.passwordHash,
+        created_at: doc.createdAt,
+        updated_at: doc.updatedAt,
+      };
+      return res.json({ data: mapped });
+    } catch (e) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+    }
+  }
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: { code: 'INVALID_ID', message: 'Invalid id.' } });
@@ -126,6 +245,64 @@ router.get('/:id', async (req, res) => {
 
 // POST /api/v1/admin/whitelist - Add new whitelisted email
 router.post('/', csrfProtection, async (req, res) => {
+  if (isMongoOnly) {
+    try {
+      const { name, email, department, year_or_semester, section } = req.body || {};
+      if (!name || typeof name !== 'string' || name.trim().length < 2) {
+        return res.status(400).json({ error: { code: 'INVALID_NAME', message: 'Name is required (min 2 chars).' } });
+      }
+      if (!email || typeof email !== 'string' || !isValidEmail(email.trim())) {
+        return res.status(400).json({ error: { code: 'INVALID_EMAIL', message: 'Valid email is required.' } });
+      }
+      const normalizedEmail = email.trim().toLowerCase();
+      const { MongoClient } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
+      await client.connect();
+      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const dup = await col.findOne({ $or: [{ email: normalizedEmail }, { officialEmail: normalizedEmail }, { currentLoginEmail: normalizedEmail }] });
+      if (dup) {
+        await client.close();
+        return res.status(409).json({ error: { code: 'EMAIL_EXISTS', message: 'Email already whitelisted.' } });
+      }
+      const dept = department ? String(department).trim().toUpperCase() : null;
+      const ysem = year_or_semester ? String(year_or_semester).trim() : null;
+      const sectionLessCourses = new Set(['BCOM', 'MBA', 'MCA']);
+      const sec = (dept && sectionLessCourses.has(dept)) ? null : (section ? String(section).trim().toUpperCase() : null);
+      const crypto = require('node:crypto');
+      const semCode = ysem ? ysem.replace(/\s+/g, '').toUpperCase() : 'MANUAL';
+      let prefix;
+      if (dept && sec) prefix = `${dept}-${sec}-${semCode}`;
+      else if (dept) prefix = `${dept}-${semCode}`;
+      else prefix = `WHITELIST`;
+      const uniqueSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const count = await col.countDocuments({ externalId: { $regex: `^${prefix}` } });
+      const externalId = `${prefix}-${String(count + 1).padStart(3, '0')}-${uniqueSuffix}`;
+      const now = new Date();
+      const doc = {
+        externalId,
+        studentId: externalId,
+        name: name.trim(),
+        email: normalizedEmail,
+        officialEmail: normalizedEmail,
+        currentLoginEmail: normalizedEmail,
+        department: dept,
+        year: ysem,
+        section: sec,
+        isActive: true,
+        votingEligible: true,
+        role: 'STUDENT',
+        emailVerified: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const inserted = await col.insertOne(doc);
+      await client.close();
+      return res.status(201).json({ data: { id: inserted.insertedId, external_id: externalId, student_id: externalId, name: doc.name, email: doc.email, department: dept, year_or_semester: ysem, section: sec, is_active: true, voting_eligible: true, role: 'STUDENT' } });
+    } catch (e) {
+      console.error('admin whitelist create failed (mongo):', e);
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Could not add whitelist entry.' } });
+    }
+  }
   try {
     const { name, email, department, year_or_semester, section } = req.body || {};
 
@@ -200,6 +377,75 @@ router.post('/', csrfProtection, async (req, res) => {
 
 // PATCH /api/v1/admin/whitelist/:id - Edit whitelisted email and details (admin only)
 router.patch('/:id', csrfProtection, async (req, res) => {
+  if (isMongoOnly) {
+    try {
+      const { MongoClient, ObjectId } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
+      await client.connect();
+      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const rawId = req.params.id;
+      let existing = null;
+      try { existing = await col.findOne({ _id: new ObjectId(rawId) }); } catch {}
+      if (!existing) {
+        try { existing = await col.findOne({ _id: rawId }); } catch {}
+      }
+      if (!existing && !isNaN(parseInt(rawId, 10))) existing = await col.findOne({ postgresId: parseInt(rawId, 10) });
+      if (!existing) { await client.close(); return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }); }
+      const { email, name, department, year_or_semester, section, is_active } = req.body || {};
+      const update = {};
+      if (email !== undefined) {
+        if (email === null || String(email).trim() === '') { await client.close(); return res.status(400).json({ error: { code: 'INVALID_EMAIL', message: 'Email cannot be empty.' } }); }
+        const trimEmail = String(email).trim().toLowerCase();
+        if (!isValidEmail(trimEmail)) { await client.close(); return res.status(400).json({ error: { code: 'INVALID_EMAIL', message: 'Valid email required.' } }); }
+        const dup = await col.findOne({ _id: { $ne: existing._id }, $or: [{ email: trimEmail }, { officialEmail: trimEmail }, { currentLoginEmail: trimEmail }] });
+        if (dup) { await client.close(); return res.status(409).json({ error: { code: 'EMAIL_EXISTS', message: 'Another record already uses this email.' } }); }
+        update.email = trimEmail; update.officialEmail = trimEmail; update.currentLoginEmail = trimEmail;
+      }
+      if (name !== undefined) {
+        if (typeof name !== 'string' || name.trim().length < 2) { await client.close(); return res.status(400).json({ error: { code: 'INVALID_NAME', message: 'Name must be at least 2 chars.' } }); }
+        update.name = String(name).trim();
+      }
+      if (department !== undefined) update.department = department === null || String(department).trim() === '' ? null : String(department).trim().toUpperCase();
+      if (year_or_semester !== undefined) update.year = year_or_semester === null || String(year_or_semester).trim() === '' ? null : String(year_or_semester).trim();
+      if (section !== undefined) {
+        if (section === null || String(section).trim() === '') update.section = null;
+        else {
+          const s = String(section).trim().toUpperCase();
+          if (s.length > 20) { await client.close(); return res.status(400).json({ error: { code: 'INVALID_SECTION', message: 'Section too long.' } }); }
+          update.section = s;
+        }
+      }
+      if (is_active !== undefined) {
+        if (typeof is_active !== 'boolean') { await client.close(); return res.status(400).json({ error: { code: 'INVALID_VALUE', message: 'is_active must be boolean.' } }); }
+        update.isActive = is_active;
+      }
+      if (Object.keys(update).length === 0) { await client.close(); return res.status(400).json({ error: { code: 'NO_CHANGES', message: 'No valid fields to update.' } }); }
+      update.updatedAt = new Date();
+      await col.updateOne({ _id: existing._id }, { $set: update });
+      const updatedDoc = await col.findOne({ _id: existing._id });
+      await client.close();
+      return res.json({ data: {
+        id: updatedDoc._id,
+        external_id: updatedDoc.externalId,
+        student_id: updatedDoc.studentId,
+        name: updatedDoc.name,
+        email: updatedDoc.email,
+        official_email: updatedDoc.officialEmail,
+        current_login_email: updatedDoc.currentLoginEmail,
+        department: updatedDoc.department,
+        year_or_semester: updatedDoc.year,
+        section: updatedDoc.section,
+        is_active: updatedDoc.isActive,
+        voting_eligible: updatedDoc.votingEligible,
+        role: updatedDoc.role,
+        username: updatedDoc.username,
+        is_registered: !!updatedDoc.passwordHash,
+      }});
+    } catch (e) {
+      console.error('admin whitelist patch failed (mongo):', e);
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Could not update whitelist.' } });
+    }
+  }
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: { code: 'INVALID_ID', message: 'Invalid id.' } });
@@ -318,6 +564,34 @@ router.patch('/:id', csrfProtection, async (req, res) => {
 
 // DELETE /api/v1/admin/whitelist/:id - Remove whitelisted entry (hard delete only if not yet registered, otherwise deactivate)
 router.delete('/:id', csrfProtection, async (req, res) => {
+  if (isMongoOnly) {
+    try {
+      const { MongoClient, ObjectId } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
+      await client.connect();
+      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const rawId = req.params.id;
+      let row = null;
+      try { row = await col.findOne({ _id: new ObjectId(rawId) }); } catch {}
+      if (!row) {
+        try { row = await col.findOne({ _id: rawId }); } catch {}
+      }
+      if (!row && !isNaN(parseInt(rawId, 10))) row = await col.findOne({ postgresId: parseInt(rawId, 10) });
+      if (!row) { await client.close(); return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }); }
+      if (row.passwordHash) {
+        await col.updateOne({ _id: row._id }, { $set: { isActive: false, votingEligible: false, updatedAt: new Date() } });
+        await client.close();
+        return res.json({ data: { deactivated: true, id: rawId } });
+      } else {
+        await col.deleteOne({ _id: row._id });
+        await client.close();
+        return res.json({ data: { deleted: true, id: rawId } });
+      }
+    } catch (e) {
+      console.error('admin whitelist delete failed (mongo):', e);
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Could not delete.' } });
+    }
+  }
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: { code: 'INVALID_ID', message: 'Invalid id.' } });

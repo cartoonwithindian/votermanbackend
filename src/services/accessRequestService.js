@@ -12,6 +12,8 @@ const db = require('../db');
 const { recordAudit } = require('../lib/authDb');
 const { hashPassword } = require('../lib/password');
 
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
 const REASONS = ['not_in_list', 'cannot_access_email', 'incorrect_email', 'other'];
 
 function normalizeEmail(v) {
@@ -57,6 +59,7 @@ function validatePayload(b) {
  * Returns null when no whitelist row owns that email (admin resolves it).
  */
 async function resolveWhitelistMatch({ college_email }) {
+  if (isMongoOnly) return null;
   const email = normalizeEmail(college_email);
   if (!email) return null;
 
@@ -97,6 +100,7 @@ async function resolveWhitelistMatch({ college_email }) {
  *  - identical pending request from anyone                            -> PENDING_EXISTS
  */
 async function findDuplicate(payload, matched) {
+  if (isMongoOnly) return null;
   const { student_id, college_email, accessible_email } = payload;
   const acc = normalizeEmail(accessible_email);
 
@@ -185,6 +189,9 @@ async function findDuplicate(payload, matched) {
 }
 
 async function submitRequest(payload, ip) {
+  if (isMongoOnly) {
+    return { ok: false, code: 'NOT_SUPPORTED', message: 'Not supported in Mongo-only mode.' };
+  }
   const resolved = await resolveWhitelistMatch(payload);
   const student_id = payload.student_id || (resolved && resolved.student_id) || null;
   const college_email = payload.college_email || (resolved && resolved.college_email) || null;
@@ -222,6 +229,7 @@ async function submitRequest(payload, ip) {
  * email, so a stranger can't probe arbitrary requests by knowing just one value.
  */
 async function checkStatus(collegeEmail, accessibleEmail) {
+  if (isMongoOnly) return null;
   const row = await db.query(
     `SELECT id, full_name, student_id, status, rejection_reason, created_at, reviewed_at
        FROM student_access_requests
@@ -234,6 +242,9 @@ async function checkStatus(collegeEmail, accessibleEmail) {
 }
 
 async function listRequests({ status, limit } = {}) {
+  if (isMongoOnly) {
+    return { requests: [], counts: {} };
+  }
   const safeStatus = ['pending', 'approved', 'rejected'].includes(status) ? status : null;
   const rows = await db.query(
     `SELECT sar.*, rev.name AS reviewed_by_name
@@ -254,6 +265,7 @@ async function listRequests({ status, limit } = {}) {
 }
 
 async function getRequest(id) {
+  if (isMongoOnly) return null;
   return db.query(
     `SELECT sar.*, rev.name AS reviewed_by_name
        FROM student_access_requests sar
@@ -269,6 +281,9 @@ async function getRequest(id) {
  * Everything happens in ONE transaction on ONE connection.
  */
 async function approveRequest(requestId, admin, note, ip) {
+  if (isMongoOnly) {
+    return { ok: false, status: 404, code: 'NOT_FOUND', message: 'Pending request not found (it may already have been reviewed).' };
+  }
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
@@ -383,6 +398,9 @@ async function rejectRequest(requestId, admin, rejectionReason, ip) {
   const clean = String(rejectionReason || '').trim().slice(0, 1000);
   if (!clean) {
     return { ok: false, status: 400, code: 'REASON_REQUIRED', message: 'A rejection reason is required.' };
+  }
+  if (isMongoOnly) {
+    return { ok: false, status: 404, code: 'NOT_FOUND', message: 'Pending request not found (it may already have been reviewed).' };
   }
 
   const updated = await db.query(

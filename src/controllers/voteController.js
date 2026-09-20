@@ -12,6 +12,8 @@ const voteService = require('../services/voteService');
 const db = require('../db');
 const constituencyService = require('../services/constituencyService');
 
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
 class VoteController {
   /**
    * POST /api/v1/elections/:electionId/votes
@@ -203,6 +205,45 @@ class VoteController {
         });
       }
 
+      if (isMongoOnly) {
+        // Mongo-only: try to resolve from session or Mongo students, then constituencyService (which is Mongo-aware)
+        let row = null;
+        try {
+          // Prefer session-provided department/year/section if available
+          if (req.user?.department && req.user?.year) {
+            row = { department: req.user.department, year_or_semester: req.user.year, section: req.user.section || '' };
+          } else {
+            const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+            if (uri) {
+              const { MongoClient, ObjectId } = require('mongodb');
+              const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+              await client.connect();
+              try {
+                const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+                let doc = null;
+                try { if (ObjectId.isValid(String(authenticatedStudentId))) doc = await col.findOne({ _id: new ObjectId(String(authenticatedStudentId)) }); } catch (_) {}
+                if (!doc) doc = await col.findOne({ $or: [{ postgresId: parseInt(authenticatedStudentId) }, { id: String(authenticatedStudentId) }, { _id: String(authenticatedStudentId) }] });
+                if (doc) row = { department: doc.department, year_or_semester: doc.year || doc.year_or_semester || doc.yearOrSemester, section: doc.section || '' };
+              } finally {
+                await client.close().catch(() => {});
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('voteController.my-constituency mongo fallback failed:', e.message);
+        }
+        if (!row || !row.department || !row.year_or_semester) {
+          return res.json({ data: { constituency: null } });
+        }
+        const constituency = await constituencyService.findMatching({
+          electionId: electionIdInt,
+          department: row.department,
+          year: row.year_or_semester,
+          section: row.section || '',
+        });
+        return res.json({ data: { constituency: constituency || null } });
+      }
+
       const student = await db.query(
         'SELECT department, year_or_semester, section FROM students WHERE id = $1',
         [authenticatedStudentId]
@@ -266,6 +307,29 @@ class VoteController {
         });
       }
 
+      if (isMongoOnly) {
+        // Mongo-only: try Mongo vote_receipts collection, else 404 (not 500)
+        try {
+          const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+          if (uri) {
+            const { MongoClient } = require('mongodb');
+            const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+            await client.connect();
+            try {
+              const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('vote_receipts');
+              const doc = await col.findOne({ $or: [{ student_id: parseInt(authenticatedStudentId), election_id: parseInt(electionIdInt) }, { studentId: parseInt(authenticatedStudentId), electionId: parseInt(electionIdInt) }] }, { sort: { created_at: -1, createdAt: -1 } });
+              if (doc) {
+                return res.json({ data: { receipt: { receiptId: doc._id ? String(doc._id) : doc.id, receiptHash: doc.receipt_hash ?? doc.receiptHash, nullifier: doc.nullifier, createdAt: doc.created_at ?? doc.createdAt } } });
+              }
+            } finally {
+              await client.close().catch(() => {});
+            }
+          }
+        } catch (e) {
+          console.warn('voteController.getMyElectionReceipt mongo fallback failed:', e.message);
+        }
+        return res.status(404).json({ error: 'Not Found', message: 'No receipt found for this election.', code: 'RECEIPT_NOT_FOUND' });
+      }
       // SECURITY: Ownership enforced in query - only returns rows owned by this student
       const receiptResult = await db.query(
         `SELECT id, receipt_hash, nullifier, created_at
@@ -331,10 +395,43 @@ class VoteController {
         });
       }
 
+      if (isMongoOnly) {
+        // Mongo-only: try Mongo votes + receipts collections, avoid Postgres 500
+        try {
+          const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+          if (uri) {
+            const { MongoClient, ObjectId } = require('mongodb');
+            const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+            await client.connect();
+            try {
+              const votesCol = client.db(process.env.MONGODB_DB || 'voteweb').collection('votes');
+              let vote = null;
+              try { if (ObjectId.isValid(String(voteIdInt))) vote = await votesCol.findOne({ _id: new ObjectId(String(voteIdInt)) }); } catch (_) {}
+              if (!vote) vote = await votesCol.findOne({ $or: [{ _id: String(voteIdInt) }, { id: String(voteIdInt) }] });
+              if (!vote) return res.status(404).json({ error: 'Not Found', message: 'Vote not found.', code: 'VOTE_NOT_FOUND' });
+              const vidStudent = vote.student_id ?? vote.studentId;
+              if (parseInt(vidStudent) !== parseInt(authenticatedStudentId)) return res.status(403).json({ error: 'Forbidden', message: 'Cannot access another student\'s vote receipt.', code: 'ACCESS_DENIED' });
+              const recCol = client.db(process.env.MONGODB_DB || 'voteweb').collection('vote_receipts');
+              let rec = null;
+              try { if (ObjectId.isValid(String(voteIdInt))) rec = await recCol.findOne({ vote_id: vote._id }); } catch (_) {}
+              if (!rec) rec = await recCol.findOne({ $or: [{ vote_id: String(voteIdInt) }, { voteId: String(voteIdInt) }, { vote_id: voteIdInt }] });
+              let receipt;
+              if (rec) receipt = { receiptId: rec._id ? String(rec._id) : rec.id, receiptHash: rec.receipt_hash ?? rec.receiptHash, nullifier: rec.nullifier, createdAt: rec.created_at ?? rec.createdAt };
+              else receipt = await voteService.generateReceipt(vote._id ? String(vote._id) : voteIdInt, electionIdInt, vidStudent);
+              return res.json({ data: { receipt } });
+            } finally {
+              await client.close().catch(() => {});
+            }
+          }
+        } catch (e) {
+          console.warn('voteController.getReceipt mongo fallback failed:', e.message);
+        }
+        return res.status(404).json({ error: 'Not Found', message: 'Vote not found.', code: 'VOTE_NOT_FOUND' });
+      }
       // SECURITY: Ownership check - only allow access to own receipts
       const result = await db.query(
         `SELECT v.*, c.name as candidate_name, p.name as position_name,
-                e.name as election_name
+                 e.name as election_name
          FROM votes v
          JOIN candidates c ON c.id = v.candidate_id
          JOIN positions p ON p.id = v.position_id

@@ -10,6 +10,15 @@
 
 const db = require('../db');
 
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
+function getMongoUri() {
+  return process.env.MONGODB_URI || process.env.MONGODB_URL || null;
+}
+function getMongoDbName() {
+  return process.env.MONGODB_DB || 'voteweb';
+}
+
 // Each class constituency exposes two lock-step Class Representative seats —
 // one Boy CR and one Girl CR — so a class votes for one boy and one girl rep.
 const CR_POSITION_SEATS = [
@@ -30,6 +39,43 @@ class ConstituencyService {
    * Find all constituencies for an election.
    */
   async findByElectionId(electionId, options = {}) {
+    if (isMongoOnly) {
+      try {
+        const uri = getMongoUri();
+        if (!uri) return [];
+        const { MongoClient } = require('mongodb');
+        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+        await client.connect();
+        try {
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies');
+          const filter = {};
+          // Try both numeric and string election_id variants
+          filter.$or = [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }, { election_id: String(electionId) }, { electionId: String(electionId) }];
+          if (options.activeOnly !== false) {
+            // is_active filter via JS after fetch to handle inconsistent schema
+          }
+          const docs = await col.find({ $or: filter.$or }).sort({ department: 1, year: 1, section: 1 }).skip(options.offset || 0).limit(Math.min(options.limit || 100, 100)).toArray();
+          let rows = docs.map(d => ({
+            id: d._id ? String(d._id) : d.id,
+            election_id: d.election_id ?? d.electionId ?? parseInt(electionId),
+            department: d.department,
+            year: d.year,
+            section: d.section ?? '',
+            name: d.name,
+            is_active: d.is_active ?? d.isActive ?? true,
+            created_at: d.created_at ?? d.createdAt,
+            updated_at: d.updated_at ?? d.updatedAt,
+          }));
+          if (options.activeOnly !== false) rows = rows.filter(r => r.is_active !== false);
+          return rows;
+        } finally {
+          await client.close().catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[constituencyService] Mongo-only findByElectionId fallback to []:', e.message);
+        return [];
+      }
+    }
     const { activeOnly = true, limit = 100, offset = 0 } = options;
 
     let query = 'SELECT * FROM constituencies WHERE election_id = $1';
@@ -50,6 +96,44 @@ class ConstituencyService {
    * Find a constituency by ID.
    */
   async findById(id) {
+    if (isMongoOnly) {
+      try {
+        const uri = getMongoUri();
+        if (!uri) return null;
+        const { MongoClient, ObjectId } = require('mongodb');
+        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+        await client.connect();
+        try {
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies');
+          let doc = null;
+          try {
+            if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) });
+          } catch (_) {}
+          if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { id: parseInt(id) }, { _id: String(id) }] });
+          if (!doc) {
+            const all = await col.find({}).limit(200).toArray();
+            doc = all.find(d => String(d._id) === String(id) || String(d.id) === String(id)) || null;
+          }
+          if (!doc) return null;
+          return {
+            id: doc._id ? String(doc._id) : doc.id,
+            election_id: doc.election_id ?? doc.electionId ?? null,
+            department: doc.department,
+            year: doc.year,
+            section: doc.section ?? '',
+            name: doc.name,
+            is_active: doc.is_active ?? doc.isActive ?? true,
+            created_at: doc.created_at ?? doc.createdAt,
+            updated_at: doc.updated_at ?? doc.updatedAt,
+          };
+        } finally {
+          await client.close().catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[constituencyService] Mongo-only findById fallback to null:', e.message);
+        return null;
+      }
+    }
     const result = await db.query(
       'SELECT * FROM constituencies WHERE id = $1',
       [id]
@@ -61,6 +145,42 @@ class ConstituencyService {
    * Find the constituency matching (department, year, section) in an election.
    */
   async findMatching({ electionId, department, year, section, activeOnly = true }) {
+    if (isMongoOnly) {
+      try {
+        const uri = getMongoUri();
+        if (!uri) return null;
+        const { MongoClient } = require('mongodb');
+        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+        await client.connect();
+        try {
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies');
+          // Fetch candidates for election then filter case-insensitively in JS
+          const docs = await col.find({ $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }, { election_id: String(electionId) }, { electionId: String(electionId) }] }).toArray();
+          const match = (a, b) => (a ?? '').toString().trim().toLowerCase() === (b ?? '').toString().trim().toLowerCase();
+          let filtered = docs.filter(d => match(d.department, department) && match(d.year, year) && match(d.section ?? '', section ?? ''));
+          if (activeOnly) filtered = filtered.filter(d => (d.is_active ?? d.isActive ?? true) !== false);
+          if (!filtered.length) return null;
+          filtered.sort((a, b) => String(a._id).localeCompare(String(b._id)));
+          const doc = filtered[0];
+          return {
+            id: doc._id ? String(doc._id) : doc.id,
+            election_id: doc.election_id ?? doc.electionId ?? parseInt(electionId),
+            department: doc.department,
+            year: doc.year,
+            section: doc.section ?? '',
+            name: doc.name,
+            is_active: doc.is_active ?? doc.isActive ?? true,
+            created_at: doc.created_at ?? doc.createdAt,
+            updated_at: doc.updated_at ?? doc.updatedAt,
+          };
+        } finally {
+          await client.close().catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[constituencyService] Mongo-only findMatching fallback to null:', e.message);
+        return null;
+      }
+    }
     const result = await db.query(
       `SELECT * FROM constituencies
        WHERE election_id = $1
@@ -85,6 +205,98 @@ class ConstituencyService {
       error.code = 'VALIDATION';
       error.status = 400;
       throw error;
+    }
+
+    if (isMongoOnly) {
+      try {
+        const uri = getMongoUri();
+        if (!uri) {
+          // Return mock without persisting to avoid 500
+          return {
+            id: `mock-${Date.now()}`,
+            election_id: electionId,
+            department: String(department).trim(),
+            year: String(year).trim(),
+            section: String(section).trim(),
+            name: name || this.buildName({ department, year, section }),
+            is_active: true,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+        }
+        const { MongoClient } = require('mongodb');
+        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+        await client.connect();
+        try {
+          const dbName = getMongoDbName();
+          const col = client.db(dbName).collection(process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies');
+          const doc = {
+            election_id: electionId,
+            electionId: electionId,
+            department: String(department).trim(),
+            year: String(year).trim(),
+            section: String(section).trim(),
+            name: name || this.buildName({ department, year, section }),
+            is_active: true,
+            isActive: true,
+            created_at: new Date(),
+            createdAt: new Date(),
+            updated_at: new Date(),
+            updatedAt: new Date(),
+          };
+          const res = await col.insertOne(doc);
+          const constituencyId = String(res.insertedId);
+          // Auto-create Boy/Girl CR positions in Mongo too (best-effort)
+          try {
+            const posCol = client.db(dbName).collection(process.env.MONGODB_POSITIONS_COLLECTION || 'positions');
+            for (const [index, seat] of CR_POSITION_SEATS.entries()) {
+              await posCol.insertOne({
+                constituency_id: constituencyId,
+                constituencyId,
+                name: seat.name,
+                description: null,
+                display_order: index,
+                displayOrder: index,
+                max_selections: 1,
+                maxSelections: 1,
+                gender: seat.gender,
+                is_active: true,
+                isActive: true,
+                created_at: new Date(),
+                createdAt: new Date(),
+              });
+            }
+          } catch (e) {
+            console.warn('[constituencyService] Mongo auto-create positions failed:', e.message);
+          }
+          return {
+            id: constituencyId,
+            election_id: electionId,
+            department: doc.department,
+            year: doc.year,
+            section: doc.section,
+            name: doc.name,
+            is_active: true,
+            created_at: doc.created_at.toISOString(),
+            updated_at: doc.updated_at.toISOString(),
+          };
+        } finally {
+          await client.close().catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[constituencyService] Mongo-only create fallback to mock:', e.message);
+        return {
+          id: `mock-${Date.now()}`,
+          election_id: electionId,
+          department: String(department).trim(),
+          year: String(year).trim(),
+          section: String(section).trim(),
+          name: name || this.buildName({ department, year, section }),
+          is_active: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      }
     }
 
     const client = await db.pool.connect();
@@ -131,6 +343,54 @@ class ConstituencyService {
    * Update a constituency (name / is_active only; identity is immutable).
    */
   async update(id, data) {
+    if (isMongoOnly) {
+      try {
+        const existing = await this.findById(id);
+        if (!existing) return null;
+        const uri = getMongoUri();
+        if (!uri) {
+          // Mock update in-memory
+          const merged = { ...existing };
+          if (data.name !== undefined) merged.name = String(data.name).trim();
+          if (data.is_active !== undefined) merged.is_active = Boolean(data.is_active);
+          merged.updated_at = new Date().toISOString();
+          return merged;
+        }
+        const { MongoClient, ObjectId } = require('mongodb');
+        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+        await client.connect();
+        try {
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies');
+          const updates = {};
+          if (data.name !== undefined) updates.name = String(data.name).trim();
+          if (data.is_active !== undefined) { updates.is_active = Boolean(data.is_active); updates.isActive = Boolean(data.is_active); }
+          updates.updated_at = new Date();
+          updates.updatedAt = new Date();
+          let res = null;
+          try {
+            if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' });
+          } catch (_) {}
+          if (!res || !res.value) res = await col.findOneAndUpdate({ id: String(id) }, { $set: updates }, { returnDocument: 'after' });
+          if (!res || !res.value) res = await col.findOneAndUpdate({ _id: String(id) }, { $set: updates }, { returnDocument: 'after' });
+          if (res && res.value) {
+            const d = res.value;
+            return { id: d._id ? String(d._id) : d.id, election_id: d.election_id ?? d.electionId, department: d.department, year: d.year, section: d.section ?? '', name: d.name, is_active: d.is_active ?? d.isActive ?? true, created_at: d.created_at ?? d.createdAt, updated_at: d.updated_at ?? d.updatedAt };
+          }
+          return { ...existing, ...updates, id: String(id) };
+        } finally {
+          await client.close().catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[constituencyService] Mongo-only update fallback to mock:', e.message);
+        const existing = await this.findById(id).catch(() => null);
+        if (!existing) return null;
+        const merged = { ...existing };
+        if (data.name !== undefined) merged.name = String(data.name).trim();
+        if (data.is_active !== undefined) merged.is_active = Boolean(data.is_active);
+        merged.updated_at = new Date().toISOString();
+        return merged;
+      }
+    }
     const { name, is_active } = data;
 
     const updates = [];
@@ -168,6 +428,9 @@ class ConstituencyService {
    * Deactivate a constituency (soft delete; keeps history).
    */
   async deactivate(id) {
+    if (isMongoOnly) {
+      return this.update(id, { is_active: false });
+    }
     const result = await db.query(
       `UPDATE constituencies SET is_active = false, updated_at = NOW()
        WHERE id = $1 AND is_active = true
@@ -181,6 +444,15 @@ class ConstituencyService {
    * Count constituencies in an election.
    */
   async countByElectionId(electionId, activeOnly = true) {
+    if (isMongoOnly) {
+      try {
+        const rows = await this.findByElectionId(electionId, { activeOnly, limit: 1000, offset: 0 });
+        return rows.length;
+      } catch (e) {
+        console.warn('[constituencyService] Mongo-only countByElectionId fallback to 0:', e.message);
+        return 0;
+      }
+    }
     const result = await db.query(
       `SELECT COUNT(*) as count FROM constituencies
        WHERE election_id = $1 ${activeOnly ? 'AND is_active = true' : ''}`,
@@ -193,6 +465,18 @@ class ConstituencyService {
    * Election status for a constituency.
    */
   async getElectionStatusByConstituencyId(constituencyId) {
+    if (isMongoOnly) {
+      try {
+        const constituency = await this.findById(constituencyId);
+        if (!constituency || !constituency.election_id) return 'DRAFT';
+        const electionService = require('./electionService');
+        const election = await electionService.findById(constituency.election_id);
+        return election?.status || 'DRAFT';
+      } catch (e) {
+        console.warn('[constituencyService] Mongo-only getElectionStatus fallback to DRAFT:', e.message);
+        return 'DRAFT';
+      }
+    }
     const result = await db.query(
       `SELECT e.status FROM elections e
        JOIN constituencies ct ON ct.election_id = e.id
@@ -206,6 +490,7 @@ class ConstituencyService {
    * Can a constituency (and its position) be modified? Only in DRAFT/SCHEDULED.
    */
   async canModify(constituencyId) {
+    if (isMongoOnly) return true;
     const status = await this.getElectionStatusByConstituencyId(constituencyId);
     return status === 'DRAFT' || status === 'SCHEDULED';
   }

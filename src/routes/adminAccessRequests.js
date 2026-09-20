@@ -16,8 +16,13 @@ const router = express.Router();
 const service = require('../services/accessRequestService');
 const { csrfProtection } = require('../middleware/csrfProtection');
 
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
 // ---- GET / ----
 router.get('/', async (req, res) => {
+  if (isMongoOnly) {
+    return res.json({ data: { requests: [], counts: {} } });
+  }
   try {
     const data = await service.listRequests({
       status: req.query.status,
@@ -32,6 +37,9 @@ router.get('/', async (req, res) => {
 
 // ---- GET /:id ----
 router.get('/:id', async (req, res) => {
+  if (isMongoOnly) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Request not found.' } });
+  }
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -50,6 +58,9 @@ router.get('/:id', async (req, res) => {
 
 // ---- PATCH /:id/approve ----
 router.patch('/:id/approve', csrfProtection, async (req, res) => {
+  if (isMongoOnly) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pending request not found (it may already have been reviewed).' } });
+  }
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -80,6 +91,9 @@ router.patch('/:id/approve', csrfProtection, async (req, res) => {
 
 // ---- PATCH /:id/reject ----
 router.patch('/:id/reject', csrfProtection, async (req, res) => {
+  if (isMongoOnly) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pending request not found (it may already have been reviewed).' } });
+  }
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {

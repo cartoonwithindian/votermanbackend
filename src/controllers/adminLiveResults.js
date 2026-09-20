@@ -6,8 +6,26 @@
  * rankings without a page refresh. Mounted behind requireAdmin in app.js.
  */
 const db = require('../db');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 async function getLive(req, res) {
+  if (isMongoOnly) {
+    // Atlas M10 — return empty live stats (no Postgres)
+    return res.json({
+      data: {
+        stats: {
+          students: { total: 0, active: 0, voting_eligible: 0 },
+          elections: { total: 0, open: 0, published: 0 },
+          candidates: { total: 0 },
+          votes: { total: 0, unique_voters: 0 },
+          accessRequests: { total: 0, pending: 0 },
+          pendingCandidateApplications: 0,
+        },
+        leaderboard: [],
+        generatedAt: new Date().toISOString(),
+      },
+    });
+  }
   try {
     const [
       students,

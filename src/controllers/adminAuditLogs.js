@@ -6,8 +6,12 @@
  * Mounted behind requireAdmin in app.js.
  */
 const db = require('../db');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 async function list(req, res) {
+  if (isMongoOnly) {
+    return res.json({ data: { logs: [] } });
+  }
   try {
     const limit = Math.min(parseInt(String(req.query.limit || '150'), 10) || 150, 500);
     const [authLogs, entityLogs] = await Promise.all([

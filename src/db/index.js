@@ -29,7 +29,7 @@ const getPoolConfig = () => {
 // Create the connection pool — allow MongoDB-only (Atlas M10) without Postgres
 let pool;
 let isMongoOnly = false;
-if (!process.env.DATABASE_URL && process.env.MONGODB_URI) {
+if (!process.env.DATABASE_URL && (process.env.MONGODB_URI || process.env.MONGODB_URL)) {
   console.log('DATABASE_URL missing — running in MongoDB-only mode (Atlas M10) — Postgres pool disabled');
   isMongoOnly = true;
   // Dummy pool that never connects; queries will be no-ops and log
@@ -53,7 +53,7 @@ const healthCheck = async () => {
     const start = Date.now();
     try {
       const { MongoClient } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI);
+      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
       await client.connect();
       await client.db(process.env.MONGODB_DB || 'voteweb').command({ ping: 1 });
       await client.close();
