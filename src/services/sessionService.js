@@ -9,6 +9,10 @@ const { hashToken } = require('../lib/crypto');
 const { setSessionCookie, clearSessionCookie, SESSION_COOKIE } = require('../lib/cookies');
 const config = require('../config');
 
+// Mongo-only (Atlas M10) in-memory session store when Postgres is disabled
+const isMongoOnly = !process.env.DATABASE_URL && !!process.env.MONGODB_URI;
+const memorySessions = new Map(); // sessionHash -> { studentId, bindingHash, mfaVerified, expiresAt }
+
 /**
  * Create a new session for a student
  * @param {object} res - Express response object
@@ -19,6 +23,29 @@ const config = require('../config');
 async function createSession(res, studentId, mfaVerified = false) {
   const sessionToken = randomBytes(32).toString('base64url');
   const bindingToken = randomBytes(32).toString('base64url');
+
+  if (isMongoOnly) {
+    // In-memory for Atlas M10 (single instance free tier)
+    const expiresAt = Date.now() + config.sessionTtlMs;
+    memorySessions.set(hashToken(sessionToken), { studentId, bindingHash: hashToken(bindingToken), mfaVerified, expiresAt });
+    // Also try Mongo Atlas if available (persistent)
+    try {
+      const { MongoClient } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI);
+      await client.connect();
+      await client.db(process.env.MONGODB_DB || 'voteweb').collection('sessions').insertOne({
+        sessionHash: hashToken(sessionToken),
+        bindingHash: hashToken(bindingToken),
+        studentId,
+        mfaVerified,
+        expiresAt: new Date(expiresAt),
+        createdAt: new Date(),
+      });
+      await client.close();
+    } catch {}
+    setSessionCookie(res, sessionToken);
+    return bindingToken;
+  }
 
   // A browser has one CampusVote session cookie. Revoke any previous session
   // before issuing a new one so switching accounts cannot reuse the old user.

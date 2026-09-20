@@ -12,6 +12,7 @@
 const db = require('../db');
 const { hashToken } = require('../lib/crypto');
 const { SESSION_COOKIE } = require('../lib/cookies');
+const isMongoOnly = !process.env.DATABASE_URL && !!process.env.MONGODB_URI;
 
 /**
  * Timing-safe string comparison
@@ -62,6 +63,50 @@ async function loadSession(req, res, next) {
   const binding = req.get('X-Session-Binding');
 
   try {
+    // Mongo-only (Atlas M10) — sessions + students in Atlas
+    if (isMongoOnly) {
+      const { MongoClient } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI);
+      await client.connect();
+      const dbMongo = client.db(process.env.MONGODB_DB || 'voteweb');
+      const hashedSession = hashToken(sessionId);
+      const sess = await dbMongo.collection('sessions').findOne({ sessionHash: hashedSession, revokedAt: null, expiresAt: { $gt: new Date() } });
+      if (!sess) { await client.close(); return next(); }
+      if (isStateChanging) {
+        if (!binding || !sameToken(sess.bindingHash, hashToken(binding))) { await client.close(); return next(); }
+      }
+      const st = await dbMongo.collection('students').findOne({ _id: sess.studentId });
+      // Fallback to Postgres id as _id or postgresId
+      const studentDoc = st || await dbMongo.collection('students').findOne({ postgresId: sess.studentId });
+      await client.close();
+      if (!studentDoc || !studentDoc.isActive) {
+        if (!studentDoc) return next();
+        return res.status(403).json({ error: 'Forbidden', message: 'Account is deactivated.', code: 'ACCOUNT_DEACTIVATED' });
+      }
+      req.user = {
+        id: studentDoc._id || studentDoc.postgresId,
+        studentId: studentDoc._id || studentDoc.postgresId,
+        externalId: studentDoc.externalId,
+        userIdentifier: studentDoc.externalId,
+        name: studentDoc.name,
+        fullName: studentDoc.name,
+        email: studentDoc.email,
+        rollNumber: studentDoc.rollNumber || null,
+        mobileNumber: studentDoc.mobileNumber || null,
+        department: studentDoc.department || null,
+        year: studentDoc.year || null,
+        section: studentDoc.section || null,
+        role: studentDoc.role,
+        passwordChangeRequired: studentDoc.passwordChangeRequired,
+        mfaEnabled: studentDoc.mfaEnabled,
+        mfaVerified: sess.mfaVerified,
+        sessionId: sess._id,
+        sessionCreatedAt: sess.createdAt,
+        sessionExpiresAt: sess.expiresAt,
+      };
+      return next();
+    }
+
     // Find valid session with associated student
     const hashedSession = hashToken(sessionId);
 

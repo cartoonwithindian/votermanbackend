@@ -434,14 +434,31 @@ router.post('/admin-portal-login', loginLimiter, csrfProtection, async (req, res
     }
 
     // Find by any login email; provision as ADMIN if it does not exist yet.
-    const account = await db.query(
-      `SELECT * FROM students
-        WHERE LOWER(current_login_email) = LOWER($1)
-           OR LOWER(email) = LOWER($1)
-           OR LOWER(official_email) = LOWER($1)
-        LIMIT 1`,
-      [normalizedEmail]
-    ).then((r) => r.rows[0]);
+    const isMongoOnly = !process.env.DATABASE_URL && !!process.env.MONGODB_URI;
+    let account = null;
+    if (isMongoOnly) {
+      const { MongoClient } = require('mongodb');
+      const mclient = new MongoClient(process.env.MONGODB_URI);
+      await mclient.connect();
+      const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+      account = await mdb.collection('students').findOne({
+        $or: [
+          { email: { $regex: `^${normalizedEmail}$`, $options: 'i' } },
+          { currentLoginEmail: { $regex: `^${normalizedEmail}$`, $options: 'i' } },
+          { officialEmail: { $regex: `^${normalizedEmail}$`, $options: 'i' } },
+        ],
+      });
+      await mclient.close();
+    } else {
+      account = await db.query(
+        `SELECT * FROM students
+          WHERE LOWER(current_login_email) = LOWER($1)
+             OR LOWER(email) = LOWER($1)
+             OR LOWER(official_email) = LOWER($1)
+          LIMIT 1`,
+        [normalizedEmail]
+      ).then((r) => r.rows[0]);
+    }
 
     let student;
     if (!account) {
@@ -450,22 +467,60 @@ router.post('/admin-portal-login', loginLimiter, csrfProtection, async (req, res
       const username = `${usernameBase}.${require('node:crypto').randomBytes(3).toString('hex')}`;
       const randomPassword = require('node:crypto').randomBytes(24).toString('base64url');
       const passwordHash = await hashPassword(randomPassword);
-      const inserted = await db.query(
-        `INSERT INTO students (external_id, name, email, current_login_email, official_email,
-                              password_hash, role, is_active, username, email_verified)
-         VALUES ($1, $2, $3, $3, $3, $4, 'ADMIN', TRUE, $5, TRUE)
-         RETURNING *`,
-        [`PORTAL-ADMIN-${require('node:crypto').randomBytes(4).toString('hex')}`, name, normalizedEmail, passwordHash, username]
-      ).then((r) => r.rows[0]);
-      student = inserted;
-      console.log('admin-portal-login: provisioned admin', { email: normalizedEmail });
+      if (isMongoOnly) {
+        const { MongoClient } = require('mongodb');
+        const mclient = new MongoClient(process.env.MONGODB_URI);
+        await mclient.connect();
+        const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+        const newId = Date.now();
+        const doc = {
+          _id: newId,
+          postgresId: newId,
+          externalId: `PORTAL-ADMIN-${require('node:crypto').randomBytes(4).toString('hex')}`,
+          name,
+          email: normalizedEmail,
+          currentLoginEmail: normalizedEmail,
+          officialEmail: normalizedEmail,
+          passwordHash,
+          role: 'ADMIN',
+          isActive: true,
+          username,
+          emailVerified: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        await mdb.collection('students').insertOne(doc);
+        await mclient.close();
+        student = { id: doc._id, external_id: doc.externalId, name: doc.name, email: doc.email, role: doc.role, is_active: true };
+        console.log('admin-portal-login: provisioned admin (mongo)', { email: normalizedEmail });
+      } else {
+        const inserted = await db.query(
+          `INSERT INTO students (external_id, name, email, current_login_email, official_email,
+                                password_hash, role, is_active, username, email_verified)
+           VALUES ($1, $2, $3, $3, $3, $4, 'ADMIN', TRUE, $5, TRUE)
+           RETURNING *`,
+          [`PORTAL-ADMIN-${require('node:crypto').randomBytes(4).toString('hex')}`, name, normalizedEmail, passwordHash, username]
+        ).then((r) => r.rows[0]);
+        student = inserted;
+        console.log('admin-portal-login: provisioned admin', { email: normalizedEmail });
+      }
     } else {
       // Make sure the listed admin is active and promoted to ADMIN.
-      const updated = await db.query(
-        `UPDATE students SET role = 'ADMIN', is_active = TRUE WHERE id = $1 RETURNING *`,
-        [account.id]
-      ).then((r) => r.rows[0]);
-      student = updated;
+      if (isMongoOnly) {
+        const { MongoClient } = require('mongodb');
+        const mclient = new MongoClient(process.env.MONGODB_URI);
+        await mclient.connect();
+        const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+        await mdb.collection('students').updateOne({ _id: account._id || account.postgresId || account.id }, { $set: { role: 'ADMIN', isActive: true } });
+        await mclient.close();
+        student = { id: account._id || account.postgresId || account.id, external_id: account.externalId, name: account.name, email: account.email, role: 'ADMIN', is_active: true };
+      } else {
+        const updated = await db.query(
+          `UPDATE students SET role = 'ADMIN', is_active = TRUE WHERE id = $1 RETURNING *`,
+          [account.id]
+        ).then((r) => r.rows[0]);
+        student = updated;
+      }
     }
 
     const bindingToken = await createSession(res, student.id, false);
