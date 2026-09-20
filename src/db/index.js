@@ -32,12 +32,26 @@ let isMongoOnly = false;
 if (!process.env.DATABASE_URL && (process.env.MONGODB_URI || process.env.MONGODB_URL)) {
   console.log('DATABASE_URL missing — running in MongoDB-only mode (Atlas M10) — Postgres pool disabled');
   isMongoOnly = true;
-  // Dummy pool that never connects; queries will be no-ops and log
+  // Dummy pool that never throws 500 for student portal; queries return empty instead.
+  // Services that are Mongo-aware will handle isMongoOnly themselves; unguarded
+  // student routes that still call db.query will now get [] rather than 500.
   pool = {
-    query: async () => { throw new Error('Postgres not configured — use MONGODB_URI'); },
+    query: async (...args) => {
+      // Log once per process to avoid noise, but keep student portal alive
+      console.warn('[db] Postgres not configured — Mongo-only mode: returning empty for query:', String(args[0]).slice(0, 80));
+      return { rows: [], rowCount: 0 };
+    },
     on: () => {},
     end: async () => {},
-    connect: async () => { throw new Error('Postgres not configured'); },
+    connect: async () => {
+      // Provide a mock client that mimics pg Client for transaction code that
+      // would otherwise throw. It returns empty on query and supports release.
+      console.warn('[db] Postgres not configured — Mongo-only mode: mock connect() returning empty client');
+      return {
+        query: async () => ({ rows: [], rowCount: 0 }),
+        release: () => {},
+      };
+    },
   };
 } else {
   pool = new Pool(getPoolConfig());

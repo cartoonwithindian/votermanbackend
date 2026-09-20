@@ -5,6 +5,7 @@
 
 const crypto = require('crypto');
 const db = require('../db');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class ReceiptService {
   /**
@@ -49,38 +50,104 @@ class ReceiptService {
     // Validate UUID format
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(receiptId)) {
+      // In Mongo-only, receipt ids may be ObjectId not UUID — try Mongo lookup anyway
+      if (isMongoOnly) {
+        try {
+          const { MongoClient, ObjectId } = require('mongodb');
+          const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+          if (uri) {
+            const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+            await client.connect();
+            try {
+              const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('vote_receipts');
+              let doc = null;
+              try { if (ObjectId.isValid(String(receiptId))) doc = await col.findOne({ _id: new ObjectId(String(receiptId)) }); } catch (_) {}
+              if (!doc) doc = await col.findOne({ $or: [{ _id: String(receiptId) }, { id: String(receiptId) }] });
+              if (!doc) return { valid: false, error: 'Receipt not found' };
+              return { valid: true, receipt: { id: doc._id ? String(doc._id) : doc.id, receiptHash: doc.receipt_hash ?? doc.receiptHash, createdAt: doc.created_at ?? doc.createdAt, electionName: doc.election_name ?? doc.electionName ?? 'Election', electionStatus: doc.election_status ?? doc.electionStatus ?? 'OPEN' } };
+            } finally {
+              await client.close().catch(() => {});
+            }
+          }
+        } catch (e) {
+          console.warn('[receiptService] verifyReceipt mongo fallback failed:', e.message);
+        }
+      }
       return { valid: false, error: 'Invalid receipt ID format' };
     }
 
-    const result = await db.query(
-      `SELECT
-        vr.id,
-        vr.receipt_hash,
-        vr.created_at,
-        vr.election_id,
-        e.name as election_name,
-        e.status as election_status
-       FROM vote_receipts vr
-       JOIN elections e ON vr.election_id = e.id
-       WHERE vr.id = $1`,
-      [receiptId]
-    );
-
-    if (result.rows.length === 0) {
+    if (isMongoOnly) {
+      try {
+        const { MongoClient, ObjectId } = require('mongodb');
+        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+        if (uri) {
+          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+          await client.connect();
+          try {
+            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('vote_receipts');
+            let doc = null;
+            try { if (ObjectId.isValid(String(receiptId))) doc = await col.findOne({ _id: new ObjectId(String(receiptId)) }); } catch (_) {}
+            if (!doc) doc = await col.findOne({ $or: [{ id: String(receiptId) }, { _id: String(receiptId) }] });
+            if (!doc) return { valid: false, error: 'Receipt not found' };
+            // Try to enrich election name/status from elections collection
+            let electionName = doc.election_name ?? doc.electionName ?? 'Election';
+            let electionStatus = doc.election_status ?? doc.electionStatus ?? 'OPEN';
+            try {
+              const eCol = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+              const eId = doc.election_id ?? doc.electionId;
+              if (eId) {
+                let eDoc = null;
+                try { if (ObjectId.isValid(String(eId))) eDoc = await eCol.findOne({ _id: new ObjectId(String(eId)) }); } catch (_) {}
+                if (!eDoc) eDoc = await eCol.findOne({ $or: [{ postgresId: parseInt(eId) }, { id: parseInt(eId) }] });
+                if (eDoc) { electionName = eDoc.name || electionName; electionStatus = eDoc.status || electionStatus; }
+              }
+            } catch (_) {}
+            return { valid: true, receipt: { id: doc._id ? String(doc._id) : doc.id, receiptHash: doc.receipt_hash ?? doc.receiptHash, createdAt: doc.created_at ?? doc.createdAt, electionName, electionStatus } };
+          } finally {
+            await client.close().catch(() => {});
+          }
+        }
+      } catch (e) {
+        console.warn('[receiptService] verifyReceipt mongo fallback failed:', e.message);
+        return { valid: false, error: 'Receipt not found' };
+      }
       return { valid: false, error: 'Receipt not found' };
     }
 
-    const receipt = result.rows[0];
-    return {
-      valid: true,
-      receipt: {
-        id: receipt.id,
-        receiptHash: receipt.receipt_hash,
-        createdAt: receipt.created_at,
-        electionName: receipt.election_name,
-        electionStatus: receipt.election_status,
-      },
-    };
+    try {
+      const result = await db.query(
+        `SELECT
+          vr.id,
+          vr.receipt_hash,
+          vr.created_at,
+          vr.election_id,
+          e.name as election_name,
+          e.status as election_status
+         FROM vote_receipts vr
+         JOIN elections e ON vr.election_id = e.id
+         WHERE vr.id = $1`,
+        [receiptId]
+      );
+
+      if (result.rows.length === 0) {
+        return { valid: false, error: 'Receipt not found' };
+      }
+
+      const receipt = result.rows[0];
+      return {
+        valid: true,
+        receipt: {
+          id: receipt.id,
+          receiptHash: receipt.receipt_hash,
+          createdAt: receipt.created_at,
+          electionName: receipt.election_name,
+          electionStatus: receipt.election_status,
+        },
+      };
+    } catch (e) {
+      if (isMongoOnly) return { valid: false, error: 'Receipt not found' };
+      throw e;
+    }
   }
 
   /**
@@ -140,49 +207,102 @@ class ReceiptService {
    * @returns {Promise<Object|null>}
    */
   async getFullReceiptDetails(studentId, electionId) {
-    const result = await db.query(
-      `SELECT
-        vr.id as receipt_id,
-        vr.receipt_hash,
-        vr.nullifier,
-        vr.created_at,
-        vr.election_id,
-        e.name as election_name,
-        e.status as election_status,
-        v.id as vote_id,
-        v.student_id,
-        st.name as student_name,
-        p.name as position_name,
-        ca.name as candidate_name
-       FROM vote_receipts vr
-       JOIN elections e ON vr.election_id = e.id
-       JOIN votes v ON vr.vote_id = v.id
-       JOIN students st ON v.student_id = st.id
-       JOIN positions p ON v.position_id = p.id
-       JOIN candidates ca ON v.candidate_id = ca.id
-       WHERE vr.student_id = $1 AND vr.election_id = $2`,
-      [studentId, electionId]
-    );
-
-    if (result.rows.length === 0) {
+    if (isMongoOnly) {
+      try {
+        const { MongoClient } = require('mongodb');
+        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+        if (uri) {
+          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+          await client.connect();
+          try {
+            const dbName = process.env.MONGODB_DB || 'voteweb';
+            const vrCol = client.db(dbName).collection('vote_receipts');
+            const doc = await vrCol.findOne({ $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] });
+            if (!doc) return null;
+            let electionName = doc.election_name ?? doc.electionName ?? 'Election';
+            let electionStatus = doc.election_status ?? doc.electionStatus ?? 'OPEN';
+            try {
+              const eCol = client.db(dbName).collection('elections');
+              const eId = doc.election_id ?? doc.electionId;
+              if (eId) {
+                const { ObjectId } = require('mongodb');
+                let eDoc = null;
+                try { if (ObjectId.isValid(String(eId))) eDoc = await eCol.findOne({ _id: new ObjectId(String(eId)) }); } catch (_) {}
+                if (!eDoc) eDoc = await eCol.findOne({ $or: [{ postgresId: parseInt(eId) }, { id: parseInt(eId) }] });
+                if (eDoc) { electionName = eDoc.name || electionName; electionStatus = eDoc.status || electionStatus; }
+              }
+            } catch (_) {}
+            return {
+              receiptId: doc._id ? String(doc._id) : doc.id,
+              receiptHash: doc.receipt_hash ?? doc.receiptHash,
+              nullifier: doc.nullifier,
+              createdAt: doc.created_at ?? doc.createdAt,
+              electionId: doc.election_id ?? doc.electionId,
+              electionName,
+              electionStatus,
+              voteId: doc.vote_id ?? doc.voteId,
+              studentId: doc.student_id ?? doc.studentId,
+              studentName: doc.student_name ?? doc.studentName ?? '',
+              positionName: doc.position_name ?? doc.positionName ?? '',
+              candidateName: doc.candidate_name ?? doc.candidateName ?? '',
+            };
+          } finally {
+            await client.close().catch(() => {});
+          }
+        }
+      } catch (e) {
+        console.warn('[receiptService] getFullReceiptDetails mongo fallback to null:', e.message);
+      }
       return null;
     }
+    try {
+      const result = await db.query(
+        `SELECT
+          vr.id as receipt_id,
+          vr.receipt_hash,
+          vr.nullifier,
+          vr.created_at,
+          vr.election_id,
+          e.name as election_name,
+          e.status as election_status,
+          v.id as vote_id,
+          v.student_id,
+          st.name as student_name,
+          p.name as position_name,
+          ca.name as candidate_name
+         FROM vote_receipts vr
+         JOIN elections e ON vr.election_id = e.id
+         JOIN votes v ON vr.vote_id = v.id
+         JOIN students st ON v.student_id = st.id
+         JOIN positions p ON v.position_id = p.id
+         JOIN candidates ca ON v.candidate_id = ca.id
+         WHERE vr.student_id = $1 AND vr.election_id = $2`,
+        [studentId, electionId]
+      );
 
-    const r = result.rows[0];
-    return {
-      receiptId: r.receipt_id,
-      receiptHash: r.receipt_hash,
-      nullifier: r.nullifier,
-      createdAt: r.created_at,
-      electionId: r.election_id,
-      electionName: r.election_name,
-      electionStatus: r.election_status,
-      voteId: r.vote_id,
-      studentId: r.student_id,
-      studentName: r.student_name,
-      positionName: r.position_name,
-      candidateName: r.candidate_name,
-    };
+      if (result.rows.length === 0) {
+        return null;
+      }
+
+      const r = result.rows[0];
+      return {
+        receiptId: r.receipt_id,
+        receiptHash: r.receipt_hash,
+        nullifier: r.nullifier,
+        createdAt: r.created_at,
+        electionId: r.election_id,
+        electionName: r.election_name,
+        electionStatus: r.election_status,
+        voteId: r.vote_id,
+        studentId: r.student_id,
+        studentName: r.student_name,
+        positionName: r.position_name,
+        candidateName: r.candidate_name,
+      };
+    } catch (e) {
+      if (isMongoOnly) return null;
+      throw e;
+    }
   }
 
   /**

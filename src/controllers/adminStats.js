@@ -5,8 +5,36 @@
  * defines the handler. Returns live counts from PostgreSQL.
  */
 const db = require('../db');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 async function getStats(req, res) {
+  if (isMongoOnly) {
+    // Atlas M10 — Postgres not configured — return empty stats with 200 instead of 500.
+    // Try Mongo ping with 2s timeout to verify connectivity, otherwise just return zeros.
+    try {
+      const { MongoClient } = require('mongodb');
+      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+      if (uri) {
+        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+        await client.connect();
+        await client.db(process.env.MONGODB_DB || 'voteweb').command({ ping: 1 }).catch(() => {});
+        await client.close().catch(() => {});
+      }
+    } catch (e) {
+      console.warn('admin stats mongo ping failed:', e.message);
+    }
+    return res.json({
+      data: {
+        students: { total: 0, active: 0, voting_eligible: 0 },
+        elections: { total: 0, open: 0, published: 0 },
+        candidates: { total: 0 },
+        votes: { total: 0, unique_voters: 0 },
+        accessRequests: { total: 0, pending: 0 },
+        pendingCandidateApplications: 0,
+        generatedAt: new Date().toISOString(),
+      },
+    });
+  }
   try {
     const [students, elections, candidates, votes, requests, pendingApps] = await Promise.all([
       db.query(`SELECT COUNT(*)::int AS total,

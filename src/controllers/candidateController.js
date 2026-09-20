@@ -11,6 +11,7 @@
 
 const candidateService = require('../services/candidateService');
 const jsonStore = require('../services/jsonCandidateStore');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class CandidateController {
   /**
@@ -58,6 +59,10 @@ class CandidateController {
         },
       });
     } catch (err) {
+      if (isMongoOnly) {
+        console.warn('[candidateController] listAll Mongo-only fallback []:', err.message);
+        return res.json({ data: [], meta: { count: 0 } });
+      }
       next(err);
     }
   }
@@ -69,14 +74,21 @@ class CandidateController {
     try {
       const { id } = req.params;
 
-      if (!id || isNaN(parseInt(id))) {
+      if (!id) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Invalid candidate ID',
+        });
+      }
+      if (!isMongoOnly && isNaN(parseInt(id))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid candidate ID',
         });
       }
 
-      const candidate = await candidateService.findApprovedById(parseInt(id));
+      const lookupId = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const candidate = await candidateService.findApprovedById(lookupId);
 
       if (!candidate) {
         return res.status(404).json({
@@ -89,6 +101,10 @@ class CandidateController {
         data: candidate,
       });
     } catch (err) {
+      if (isMongoOnly) {
+        console.warn('[candidateController] get Mongo-only fallback 404:', err.message);
+        return res.status(404).json({ error: 'Not Found', message: 'Candidate not found' });
+      }
       next(err);
     }
   }
@@ -101,14 +117,21 @@ class CandidateController {
       const { positionId } = req.params;
       const { active_only, limit, offset } = req.query;
 
-      if (!positionId || isNaN(parseInt(positionId))) {
+      if (!positionId) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Invalid position ID',
+        });
+      }
+      if (!isMongoOnly && isNaN(parseInt(positionId))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid position ID',
         });
       }
 
-      const candidates = await candidateService.findByPositionId(parseInt(positionId), {
+      const pid = isMongoOnly && isNaN(parseInt(positionId)) ? positionId : parseInt(positionId);
+      const candidates = await candidateService.findByPositionId(pid, {
         activeOnly: active_only !== 'false',
         limit: parseInt(limit) || 100,
         offset: parseInt(offset) || 0,
@@ -121,6 +144,10 @@ class CandidateController {
         },
       });
     } catch (err) {
+      if (isMongoOnly) {
+        console.warn('[candidateController] list Mongo-only fallback []:', err.message);
+        return res.json({ data: [], meta: { count: 0 } });
+      }
       next(err);
     }
   }

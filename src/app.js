@@ -59,17 +59,38 @@ app.use(helmet({
 }));
 
 // CORS configuration
+// s1.students.made-a.tech is Clerk's satellite/JWKS host (clerk.s1...) — the Next.js
+// app itself should be served from students.made-a.tech only, but users who hit
+// https://s1.students.made-a.tech/admin/... (Render routes that host to the same
+// service) must NOT get a 500/CORS rejection. Also allow clerk.* hosts for the
+// Clerk Frontend API / JWKS and the onrender fallbacks.
+const builtinProdOrigins = [
+  'https://students.made-a.tech',
+  'https://s1.students.made-a.tech',
+  'https://clerk.students.made-a.tech',
+  'https://clerk.s1.students.made-a.tech',
+  'https://votermanfrontend.onrender.com',
+  'https://votermanbackend.onrender.com',
+  'https://made-a.tech',
+  'https://www.made-a.tech',
+];
 const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3001')
   .split(',')
   .map(o => o.trim())
   .filter(Boolean)
-  .concat(['http://10.139.255.165:3001', 'http://127.0.0.1:3001']);
+  .concat(['http://10.139.255.165:3001', 'http://127.0.0.1:3001'])
+  .concat(builtinProdOrigins);
 
 const corsOptions = {
   origin: (origin, cb) => {
     // Allow requests with no origin (curl, Postman, server-to-server)
     if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
+    // Permissive fallback: any HTTPS subdomain of made-a.tech or onrender.com.
+    // This covers students.made-a.tech, s1.students..., clerk.s1..., plus any
+    // future Render preview URL without requiring an env redeploy.
+    if (/^https:\/\/(?:[a-z0-9-]+\.)*made-a\.tech$/.test(origin)) return cb(null, true);
+    if (/^https:\/\/(?:[a-z0-9-]+\.)*onrender\.com$/.test(origin)) return cb(null, true);
 
     // Check for pattern-based origins (e.g., *.vercel.app)
     const patternOrigins = process.env.CORS_ORIGIN_PATTERNS

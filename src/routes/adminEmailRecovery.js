@@ -18,6 +18,7 @@ const router = express.Router();
 const db = require('../db');
 const { recordAudit, publicUser } = require('../lib/authDb');
 const { csrfProtection } = require('../middleware/csrfProtection');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 function err(res, status, code, message) {
   return res.status(status).json({ error: { code, message } });
@@ -25,6 +26,9 @@ function err(res, status, code, message) {
 
 // ---- GET / (list, ?status=pending|approved|rejected) ----
 router.get('/', async (req, res) => {
+  if (isMongoOnly) {
+    return res.json({ data: { requests: [], counts: {} } });
+  }
   try {
     const status = ['pending', 'approved', 'rejected'].includes(String(req.query.status))
       ? String(req.query.status)
@@ -64,6 +68,9 @@ router.get('/', async (req, res) => {
 
 // ---- GET /:id ----
 router.get('/:id', async (req, res) => {
+  if (isMongoOnly) {
+    return err(res, 404, 'NOT_FOUND', 'Request not found.');
+  }
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return err(res, 400, 'INVALID_ID', 'Invalid request id.');
@@ -87,6 +94,9 @@ router.get('/:id', async (req, res) => {
 
 // ---- POST /:id/approve ----
 router.post('/:id/approve', csrfProtection, async (req, res) => {
+  if (isMongoOnly) {
+    return err(res, 404, 'NOT_FOUND', 'Pending request not found (Mongo-only mode).');
+  }
   let client = null;
   try {
     const id = parseInt(req.params.id);
@@ -187,6 +197,9 @@ router.post('/:id/approve', csrfProtection, async (req, res) => {
 
 // ---- POST /:id/reject ----
 router.post('/:id/reject', csrfProtection, async (req, res) => {
+  if (isMongoOnly) {
+    return err(res, 404, 'NOT_FOUND', 'Pending request not found (Mongo-only mode).');
+  }
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return err(res, 400, 'INVALID_ID', 'Invalid request id.');

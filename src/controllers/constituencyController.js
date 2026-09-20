@@ -12,6 +12,7 @@ const constituencyService = require('../services/constituencyService');
 const candidateAppService = require('../services/candidateApplicationService');
 const electionService = require('../services/electionService');
 const positionService = require('../services/positionService');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class ConstituencyController {
   /**
@@ -22,15 +23,26 @@ class ConstituencyController {
     try {
       const { election_id, active_only } = req.query;
 
-      if (!election_id || isNaN(parseInt(election_id))) {
+      if (!election_id) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'election_id query parameter is required.',
+        });
+      }
+      if (!isMongoOnly && isNaN(parseInt(election_id))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'election_id query parameter is required.',
         });
       }
 
-      const election = await electionService.findById(parseInt(election_id));
+      const eid = isMongoOnly && isNaN(parseInt(election_id)) ? election_id : parseInt(election_id);
+      const election = await electionService.findById(eid);
       if (!election) {
+        if (isMongoOnly) {
+          // Mongo-only: return empty list instead of 404 so student ballot loads
+          return res.json({ data: [], meta: { count: 0, electionId: eid } });
+        }
         return res.status(404).json({
           error: 'Not Found',
           message: `Election with ID ${election_id} not found`,
@@ -38,15 +50,21 @@ class ConstituencyController {
       }
 
       const constituencies = await constituencyService.findByElectionId(
-        parseInt(election_id),
+        eid,
         { activeOnly: active_only !== 'false' }
       );
 
       res.json({
         data: constituencies,
-        meta: { count: constituencies.length, electionId: parseInt(election_id) },
+        meta: { count: constituencies.length, electionId: eid },
       });
     } catch (err) {
+      if (isMongoOnly) {
+        console.warn('[constituencyController] list Mongo-only fallback []:', err.message);
+        const eid = req.query.election_id;
+        const fallbackId = isNaN(parseInt(eid)) ? eid : parseInt(eid);
+        return res.json({ data: [], meta: { count: 0, electionId: fallbackId } });
+      }
       next(err);
     }
   }
@@ -59,30 +77,49 @@ class ConstituencyController {
     try {
       const { id } = req.params;
 
-      if (!id || isNaN(parseInt(id))) {
+      if (!id) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Invalid constituency ID',
+        });
+      }
+      if (!isMongoOnly && isNaN(parseInt(id))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid constituency ID',
         });
       }
 
-      const constituency = await constituencyService.findById(parseInt(id));
+      const cid = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const constituency = await constituencyService.findById(cid);
       if (!constituency) {
+        if (isMongoOnly) {
+          // Return empty positions list instead of 404 so ballot loads
+          const positions = await positionService.findByConstituencyId(cid, {
+            activeOnly: req.query.active_only !== 'false',
+          });
+          return res.json({ data: positions, meta: { count: positions.length, constituencyId: cid } });
+        }
         return res.status(404).json({
           error: 'Not Found',
           message: `Constituency with ID ${id} not found`,
         });
       }
 
-      const positions = await positionService.findByConstituencyId(parseInt(id), {
+      const positions = await positionService.findByConstituencyId(cid, {
         activeOnly: req.query.active_only !== 'false',
       });
 
       res.json({
         data: positions,
-        meta: { count: positions.length, constituencyId: parseInt(id) },
+        meta: { count: positions.length, constituencyId: cid },
       });
     } catch (err) {
+      if (isMongoOnly) {
+        console.warn('[constituencyController] listPositions Mongo-only fallback []:', err.message);
+        const cid = req.params.id;
+        return res.json({ data: [], meta: { count: 0, constituencyId: cid } });
+      }
       next(err);
     }
   }

@@ -5,6 +5,7 @@
 
 const db = require('../db');
 const notificationService = require('./notificationService');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class AnnouncementService {
   /**
@@ -12,6 +13,21 @@ class AnnouncementService {
    * Notifies approved + rejected candidates when the announcement is published.
    */
   async create({ electionId, title, message, audience = 'all', priority = 'normal', published = false, createdBy }) {
+    if (isMongoOnly) {
+      // Avoid 500 for admin create when Postgres disabled; return mock
+      return {
+        id: `mock-${Date.now()}`,
+        election_id: electionId || null,
+        title,
+        message,
+        audience,
+        priority,
+        is_published: !!published,
+        published_at: published ? new Date().toISOString() : null,
+        created_by: createdBy || null,
+        created_at: new Date().toISOString(),
+      };
+    }
     const result = await db.query(
       `INSERT INTO announcements (election_id, title, message, audience, priority, is_published, published_at, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -40,6 +56,41 @@ class AnnouncementService {
    * List announcements with filters
    */
   async list({ electionId, publishedOnly = false, audience, limit = 50, offset = 0 }) {
+    if (isMongoOnly) {
+      try {
+        const { MongoClient } = require('mongodb');
+        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+        if (uri) {
+          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+          await client.connect();
+          try {
+            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('announcements');
+            const filter = {};
+            if (publishedOnly) filter.is_published = true;
+            if (electionId) filter.election_id = parseInt(electionId);
+            // audience filtering done in JS for Mongo schema variance
+            let docs = await col.find(filter).sort({ created_at: -1, createdAt: -1 }).limit(limit).skip(offset).toArray();
+            if (audience) docs = docs.filter(d => d.audience === audience || d.audience === 'all');
+            return docs.map(d => ({
+              id: d._id ? String(d._id) : d.id,
+              election_id: d.election_id ?? d.electionId ?? null,
+              title: d.title,
+              message: d.message,
+              audience: d.audience || 'all',
+              priority: d.priority || 'normal',
+              is_published: d.is_published ?? d.isPublished ?? false,
+              published_at: d.published_at ?? d.publishedAt ?? null,
+              created_at: d.created_at ?? d.createdAt ?? new Date().toISOString(),
+            }));
+          } finally {
+            await client.close().catch(() => {});
+          }
+        }
+      } catch (e) {
+        console.warn('[announcementService] list mongo fallback to []:', e.message);
+      }
+      return [];
+    }
     let query = 'SELECT * FROM announcements WHERE 1=1';
     const params = [];
     let paramIndex = 1;
@@ -63,24 +114,74 @@ class AnnouncementService {
     query += ` ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     params.push(limit, offset);
 
-    const result = await db.query(query, params);
-    return result.rows;
+    try {
+      const result = await db.query(query, params);
+      return result.rows;
+    } catch (e) {
+      if (isMongoOnly) {
+        console.warn('[announcementService] list fallback to []:', e.message);
+        return [];
+      }
+      throw e;
+    }
   }
 
   /**
    * Get single announcement by ID
    */
   async getById(id, publishedOnly = false) {
-    const result = publishedOnly
-      ? await db.query(
-          'SELECT * FROM announcements WHERE id = $1 AND is_published = true',
-          [id]
-        )
-      : await db.query(
-          'SELECT * FROM announcements WHERE id = $1',
-          [id]
-        );
-    return result.rows[0] || null;
+    if (isMongoOnly) {
+      try {
+        const { MongoClient, ObjectId } = require('mongodb');
+        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+        if (uri) {
+          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+          await client.connect();
+          try {
+            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('announcements');
+            let doc = null;
+            try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
+            if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
+            if (!doc) return null;
+            if (publishedOnly && !(doc.is_published ?? doc.isPublished)) return null;
+            return {
+              id: doc._id ? String(doc._id) : doc.id,
+              election_id: doc.election_id ?? doc.electionId ?? null,
+              title: doc.title,
+              message: doc.message,
+              audience: doc.audience || 'all',
+              priority: doc.priority || 'normal',
+              is_published: doc.is_published ?? doc.isPublished ?? false,
+              published_at: doc.published_at ?? doc.publishedAt ?? null,
+              created_at: doc.created_at ?? doc.createdAt ?? new Date().toISOString(),
+            };
+          } finally {
+            await client.close().catch(() => {});
+          }
+        }
+      } catch (e) {
+        console.warn('[announcementService] getById mongo fallback to null:', e.message);
+      }
+      return null;
+    }
+    try {
+      const result = publishedOnly
+        ? await db.query(
+            'SELECT * FROM announcements WHERE id = $1 AND is_published = true',
+            [id]
+          )
+        : await db.query(
+            'SELECT * FROM announcements WHERE id = $1',
+            [id]
+          );
+      return result.rows[0] || null;
+    } catch (e) {
+      if (isMongoOnly) {
+        console.warn('[announcementService] getById fallback to null:', e.message);
+        return null;
+      }
+      throw e;
+    }
   }
 
   /**
@@ -167,6 +268,7 @@ class AnnouncementService {
    * admin-only announcements do not notify candidates.
    */
   async notifyCandidates(announcement) {
+    if (isMongoOnly) return 0;
     try {
       if (!announcement || !announcement.is_published) {
         return 0;

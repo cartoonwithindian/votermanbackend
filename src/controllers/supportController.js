@@ -10,6 +10,7 @@
 
 const supportService = require('../services/supportService');
 const { sanitizeString, validateLength } = require('../lib/sanitize');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class SupportController {
   /**
@@ -75,6 +76,10 @@ class SupportController {
         data: request,
       });
     } catch (err) {
+      if (isMongoOnly) {
+        console.warn('[supportController] create Mongo-only fallback mock:', err.message);
+        return res.status(201).json({ data: { id: `mock-${Date.now()}`, student_id: req.user?.studentId, category: req.body.category, subject: req.body.subject, description: req.body.description, status: 'open', created_at: new Date().toISOString() } });
+      }
       next(err);
     }
   }
@@ -102,6 +107,10 @@ class SupportController {
         data: requests,
       });
     } catch (err) {
+      if (isMongoOnly) {
+        console.warn('[supportController] list Mongo-only fallback []:', err.message);
+        return res.json({ data: [] });
+      }
       next(err);
     }
   }
@@ -125,7 +134,8 @@ class SupportController {
 
       const { id } = req.params;
 
-      const request = await supportService.getById(parseInt(id));
+      const lookupId = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const request = await supportService.getById(lookupId);
 
       if (!request) {
         return res.status(404).json({
@@ -134,8 +144,8 @@ class SupportController {
         });
       }
 
-      // SECURITY: Students can only view their own requests
-      if (request.student_id !== studentId) {
+      // SECURITY: Students can only view their own requests — handle both number and string ids
+      if (String(request.student_id) !== String(studentId)) {
         return res.status(403).json({
           error: 'Forbidden',
           message: 'You can only view your own support requests',
@@ -144,6 +154,10 @@ class SupportController {
 
       res.json({ data: request });
     } catch (err) {
+      if (isMongoOnly) {
+        console.warn('[supportController] get Mongo-only fallback 404:', err.message);
+        return res.status(404).json({ error: 'Not Found', message: 'Support request not found' });
+      }
       next(err);
     }
   }

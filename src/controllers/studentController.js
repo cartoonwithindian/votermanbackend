@@ -440,8 +440,35 @@ class StudentController {
   /**
    * PATCH /api/v1/students/bulk-voting-eligible
    * Set voting_eligible for all (or a filtered set of) students.
+   * Mongo-only: return empty success instead of 500 when Postgres not configured.
    */
   async bulkSetVotingEligible(req, res, next) {
+    const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+    if (isMongoOnly) {
+      const { voting_eligible } = req.body;
+      if (typeof voting_eligible !== 'boolean') {
+        return res.status(400).json({ error: 'Validation Error', message: 'voting_eligible must be a boolean' });
+      }
+      // Mongo-only: try to bulk update Mongo students collection, otherwise mock
+      try {
+        const { MongoClient } = require('mongodb');
+        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+        if (uri) {
+          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+          await client.connect();
+          const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+          const filter = {};
+          if (req.body.role && typeof req.body.role === 'string') filter.role = req.body.role;
+          if (typeof req.body.is_active === 'boolean') filter.isActive = req.body.is_active;
+          const result = await col.updateMany(filter, { $set: { votingEligible: voting_eligible, voting_eligible, updatedAt: new Date(), updated_at: new Date() } });
+          await client.close().catch(() => {});
+          return res.json({ data: { updated: result.modifiedCount || 0, voting_eligible } });
+        }
+      } catch (e) {
+        console.warn('[studentController] bulkSetVotingEligible mongo fallback:', e.message);
+      }
+      return res.json({ data: { updated: 0, voting_eligible } });
+    }
     try {
       const { voting_eligible, role, is_active } = req.body;
 
