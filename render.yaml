@@ -1,78 +1,49 @@
-// yaml
 services:
-  # Backend API Service
   - type: web
-    name: voteweb-backend
+    name: votermanbackend
     runtime: node
     plan: free
-    rootDir: .
-    buildCommand: npm install
+    buildCommand: npm ci
     preDeployCommand: npm run migrate
     startCommand: node src/server.js
+    healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 10000
       - key: DATABASE_URL
         fromDatabase:
-          name: voteweb-db
+          name: voterman-db
           property: connectionString
+      - key: DB_SSL
+        value: "true"
       - key: SESSION_SECRET
         generateValue: true
       - key: TOTP_ENCRYPTION_KEY
         generateValue: true
-      - key: COOKIE_SECURE
-        value: "true"
+      # CORS_ORIGIN to be set to https://votermanfrontend.onrender.com in Render dashboard
       - key: CORS_ORIGIN
         sync: false
-      - key: FRONTEND_URL
-        sync: false
-      - key: DB_SSL
+      - key: COOKIE_SECURE
         value: "true"
-      # --- Appwrite Education Pack (Profile Images & Candidate Photos) ---
-      # Same bucket "candidate-photos" (display: Profile Images & Candidate Photos)
-      # folders: candidates/ + profiles/, 5MB, zstd, antivirus, transformations
-      # Project: 6a961a3200335ef36ba8 (fra). Paste API key in Render dashboard (sync:false).
-      - key: APPWRITE_ENDPOINT
-        value: https://fra.cloud.appwrite.io/v1
-      - key: APPWRITE_PROJECT_ID
-        value: 6a961a3200335ef36ba8
-      - key: APPWRITE_API_KEY
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: CLERK_SECRET_KEY
         sync: false
-      - key: APPWRITE_PHOTOS_BUCKET
-        value: candidate-photos
-      - key: APPWRITE_PROFILE_BUCKET
-        value: profile-images
-    healthCheckPath: /api/health
-    autoDeploy: true
- 
-  # Frontend Service
-  - type: web
-    name: voteweb-frontend
-    runtime: node
-    plan: free
-    rootDir: voteweb-Frontend
-    buildCommand: npm ci --include=dev && npm run build
-    startCommand: npm start
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: NEXT_PUBLIC_API_URL
-        fromService:
-          name: voteweb-backend
-          property: env
-          key: RENDER_EXTERNAL_URL
-      - key: NEXT_PUBLIC_APP_URL
-        fromService:
-          name: voteweb-frontend
-          property: env
-          key: RENDER_EXTERNAL_URL
-    autoDeploy: true
- 
-  # PostgreSQL Database (free: expires after 30 days)
-  - type: database
-    name: voteweb-db
+      - key: CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: ADMIN_EMAILS
+        value: admin@dbit.edu,admin@campusvote.edu
+      - key: ADMIN_PORTAL_PASSWORD
+        sync: false
+      # MONGODB_URI to be set to mongodb+srv://voteweb:VoteWeb123!@cluster0.e01dlus.mongodb.net/voteweb in Render dashboard
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: voteweb
+
+databases:
+  - name: voterman-db
     plan: free
     databaseName: voteweb
     ipAllowList: []

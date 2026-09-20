@@ -8,10 +8,17 @@
  *   - `profile-images` ("Profile Images") : user profile avatars, 5 MB
  * Previously single-bucket + folders workaround kept Free within 1-bucket limit;
  * now dedicated bucket per concern. Postgres keeps only URL — no blobs.
+ *
+ * LOCAL FALLBACK (100% local): if APPWRITE_ENDPOINT / PROJECT_ID / API_KEY are
+ * not set, files are stored under /tmp/voteweb-uploads and a local URL like
+ * http://localhost:3000/uploads/<fileId> is returned. No remote API key required.
+ * When Appwrite env is present, the original cloud path is used (prod).
  */
 
 const { Client, Storage, ID, Permission, Role } = require('node-appwrite');
 const { InputFile } = require('node-appwrite/file');
+const fs = require('fs');
+const path = require('path');
 
 const ALLOWED_TYPES = {
   'image/jpeg': 'jpg',
@@ -26,6 +33,25 @@ const ALLOWED_TYPES = {
 const MAX_BYTES = 5 * 1024 * 1024;
 // Candidate legacy limit for error messaging; kept for reference.
 const LEGACY_MAX_BYTES = 2 * 1024 * 1024;
+
+const LOCAL_UPLOAD_DIR = process.env.LOCAL_UPLOAD_DIR || '/tmp/voteweb-uploads';
+
+function isAppwriteConfigured() {
+  return Boolean(process.env.APPWRITE_ENDPOINT && process.env.APPWRITE_PROJECT_ID && process.env.APPWRITE_API_KEY);
+}
+
+function ensureLocalDir(subFolder) {
+  const dir = subFolder ? path.join(LOCAL_UPLOAD_DIR, subFolder) : LOCAL_UPLOAD_DIR;
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+function localBaseUrl() {
+  const port = process.env.PORT || 3000;
+  return process.env.LOCAL_UPLOAD_BASE_URL || `http://localhost:${port}`;
+}
 
 function storageClient() {
   const endpoint = process.env.APPWRITE_ENDPOINT;
@@ -62,7 +88,7 @@ function hasValidMagicBytes(buffer, mimeType) {
 }
 
 /**
- * Upload a photo buffer to Appwrite Storage.
+ * Upload a photo buffer to Appwrite Storage or local filesystem fallback.
  * @param {Buffer} buffer - Raw image bytes
  * @param {string} mimeType - One of image/jpeg, image/png, image/webp, image/heic, image/heif
  * @param {number|string} studentId - Uploader identity (from session, for the filename)
@@ -96,10 +122,32 @@ async function uploadPhoto(buffer, mimeType, studentId, opts = {}) {
     throw err;
   }
 
+  // Local fallback: no Appwrite configured -> store under /tmp/voteweb-uploads
+  if (!isAppwriteConfigured()) {
+    const folder = typeof opts.folder === 'string' ? opts.folder : 'candidates';
+    // Ensure base dir exists; keep files flat under /tmp/voteweb-uploads for
+    // simplest static serving, but preserve folder metadata in returned object.
+    const dir = ensureLocalDir();
+    const fileId = ID.unique();
+    const fileName = `${fileId}.${ext}`;
+    const filePath = path.join(dir, fileName);
+    fs.writeFileSync(filePath, buffer);
+    // Return local URL like http://localhost:3000/uploads/<fileId>
+    const url = `${localBaseUrl()}/uploads/${fileId}`;
+    console.log(`[local-upload] stored ${filePath} -> ${url}`);
+    // Return shape compatible with Appwrite path (url, fileId, bucketId, folder)
+    return {
+      url,
+      fileId,
+      bucketId: opts.bucketId || process.env.APPWRITE_PHOTOS_BUCKET || 'candidate-photos',
+      folder: folder || '',
+    };
+  }
+
   const { client, endpoint, projectId } = storageClient();
   const storage = new Storage(client);
   const bucketId = opts.bucketId || process.env.APPWRITE_PHOTOS_BUCKET || 'candidate-photos';
-  const folder = opts.folder || 'candidates';
+  const folder = typeof opts.folder === 'string' ? opts.folder : 'candidates';
   const file = await storage.createFile(
     bucketId,
     ID.unique(),

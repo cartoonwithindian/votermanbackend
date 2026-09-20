@@ -10,6 +10,7 @@
  */
 
 const candidateService = require('../services/candidateService');
+const jsonStore = require('../services/jsonCandidateStore');
 
 class CandidateController {
   /**
@@ -170,6 +171,43 @@ class CandidateController {
       }
       next(err);
     }
+  }
+
+  // =====================================================
+  // JSON CANDIDATE ADMIN ENDPOINTS
+  // =====================================================
+
+  /**
+   * POST /api/v1/admin/candidates/json — upload JSON array
+   * Body: { candidates: [...] }  (Card: profilePhotoUrl,name,position,dept/year,bio + Profile: manifesto etc.)
+   * Cohort filter (department/year/section) stays server-enforced for students.
+   */
+  async uploadJson(req, res, next) {
+    try {
+      const payload = req.body.candidates || req.body.data || req.body;
+      const arr = Array.isArray(payload) ? payload : Array.isArray(payload.candidates) ? payload.candidates : null;
+      if (!arr) return res.status(400).json({ error: 'Bad Request', message: 'Body must be {candidates:[...]} or [...]', code: 'INVALID_JSON' });
+      const err = jsonStore.validateCandidates(arr);
+      if (err) return res.status(400).json({ error: 'Bad Request', message: err, code: 'VALIDATION_ERROR' });
+      const mapped = arr.map((c, i) => jsonStore.mapJsonToRow(c, i));
+      const saved = jsonStore.writeJsonCandidates(arr);
+      return res.json({ success: true, message: `Uploaded ${arr.length} candidates from JSON`, count: arr.length, path: saved.path, preview: mapped.slice(0, 2) });
+    } catch (e) { next(e); }
+  }
+
+  async getJson(req, res, next) {
+    try {
+      const raw = jsonStore.readJsonCandidates();
+      if (!raw) return res.json({ hasJson: false, count: 0, candidates: [] });
+      return res.json({ hasJson: true, count: raw.length, candidates: raw });
+    } catch (e) { next(e); }
+  }
+
+  async deleteJson(req, res, next) {
+    try {
+      const deleted = jsonStore.deleteJsonCandidates();
+      return res.json({ success: true, deleted, message: deleted ? 'JSON override removed, DB is now active' : 'No JSON to delete' });
+    } catch (e) { next(e); }
   }
 }
 

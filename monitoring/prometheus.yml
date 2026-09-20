@@ -25,7 +25,7 @@ scrape_configs:
       credentials_file: /run/secrets/campusvote-metrics-token
     static_configs:
       - targets:
-          - voteweb-backend-api.onrender.com
+          - localhost:3000
         labels:
           service: campusvote-api
 

@@ -8,6 +8,8 @@
  */
 
 const db = require('../db');
+const jsonStore = require('./jsonCandidateStore');
+const mongoStore = require('./mongoCandidateStore');
 
 class CandidateService {
   /**
@@ -31,6 +33,34 @@ class CandidateService {
       year,
       section,
     } = options;
+
+    // Priority: Atlas -> JSON -> DB
+    // 1) Atlas (MONGODB_URI) — preferred when configured
+    try {
+      if (await mongoStore.hasMongoCandidates()) {
+        const mongoRows = await mongoStore.readMongoCandidates();
+        if (mongoRows && mongoRows.length) {
+          // mongo docs already mapped to CandidateRow via jsonStore.mapJsonToRow on write
+          const { rows } = mongoStore.filterMongoRows(mongoRows, { gender, department, year, section, limit, offset });
+          return rows;
+        }
+      }
+    } catch (e) {
+      console.warn('[candidateService] Atlas read failed, falling back:', e.message);
+    }
+
+    // 2) JSON override: if admin uploaded candidates.json, students see JSON
+    // filtered by their own department/year/section (cohort isolation).
+    // Card: profilePhotoUrl(39), name/position(66), department•year(72), bio(77)
+    // Profile: photo header(68), info(192), bio(132), manifestos(151)
+    if (jsonStore.hasJsonOverride()) {
+      const raw = jsonStore.readJsonCandidates();
+      if (raw && Array.isArray(raw)) {
+        const mapped = raw.map((c, idx) => jsonStore.mapJsonToRow(c, idx));
+        const { rows } = jsonStore.filterJsonCandidates(mapped, { gender, department, year, section, limit, offset });
+        return rows;
+      }
+    }
 
     // Query approved applications with position information
     let query = `
@@ -94,6 +124,26 @@ class CandidateService {
    * Find a single approved candidate by ID for public view.
    */
   async findApprovedById(id) {
+    // Priority: Atlas -> JSON -> DB
+    try {
+      if (await mongoStore.hasMongoCandidates()) {
+        const mongoRows = await mongoStore.readMongoCandidates();
+        if (mongoRows && mongoRows.length) {
+          const found = mongoRows.find(r => String(r._id) === String(id) || String(r.id) === String(id));
+          if (found) return found;
+        }
+      }
+    } catch (e) {
+      console.warn('[candidateService] Atlas findById failed, falling back:', e.message);
+    }
+    if (jsonStore.hasJsonOverride()) {
+      const raw = jsonStore.readJsonCandidates();
+      if (raw && Array.isArray(raw)) {
+        const mapped = raw.map((c, idx) => jsonStore.mapJsonToRow(c, idx));
+        const found = mapped.find(r => String(r.id) === String(id));
+        if (found) return found;
+      }
+    }
     const result = await db.query(`
       SELECT
         ca.id,
@@ -123,6 +173,26 @@ class CandidateService {
    * Count approved candidates with optional filters.
    */
   async countApproved(options = {}) {
+    // Priority: Atlas -> JSON -> DB
+    try {
+      if (await mongoStore.hasMongoCandidates()) {
+        const mongoRows = await mongoStore.readMongoCandidates();
+        if (mongoRows && mongoRows.length) {
+          const { total } = mongoStore.filterMongoRows(mongoRows, { ...options, limit: 100000, offset: 0 });
+          return total;
+        }
+      }
+    } catch (e) {
+      console.warn('[candidateService] Atlas count failed, falling back:', e.message);
+    }
+    if (jsonStore.hasJsonOverride()) {
+      const raw = jsonStore.readJsonCandidates();
+      if (raw && Array.isArray(raw)) {
+        const mapped = raw.map((c, idx) => jsonStore.mapJsonToRow(c, idx));
+        const { total } = jsonStore.filterJsonCandidates(mapped, { ...options, limit: 100000, offset: 0 });
+        return total;
+      }
+    }
     const { gender, department, year, section } = options;
 
     let query = `

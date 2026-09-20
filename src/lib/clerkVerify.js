@@ -14,14 +14,14 @@
 const { clerkMiddleware, getAuth } = require('@clerk/express');
 
 // Express middleware that requires the Clerk env keys before enabling the
-// official token verification. Returns a friendly 500 configuration error the
-// same way the old manual path did when CLERK_ISSUER was missing.
+// official token verification. In local mode without keys it returns a clear
+// 501 so callers know Clerk is disabled locally (no remote API key required).
 function requireClerkMiddleware(req, res, next) {
   const hasKeys = process.env.CLERK_SECRET_KEY || process.env.CLERK_PUBLISHABLE_KEY;
   if (!hasKeys) {
-    console.error('clerkVerify: CLERK_SECRET_KEY / CLERK_PUBLISHABLE_KEY not configured');
-    return res.status(500).json({
-      error: { code: 'CLERK_NOT_CONFIGURED', message: 'Clerk bridge is not configured on the server.' },
+    console.warn('clerkVerify: CLERK_SECRET_KEY / CLERK_PUBLISHABLE_KEY not configured — Clerk disabled in local mode');
+    return res.status(501).json({
+      error: { code: 'CLERK_NOT_CONFIGURED', message: 'Clerk disabled in local mode — set CLERK_SECRET_KEY to enable.' },
     });
   }
   // Safe debug logging: only header presence + token length. The token value

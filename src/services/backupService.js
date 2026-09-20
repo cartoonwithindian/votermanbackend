@@ -15,12 +15,20 @@
  *   via a topological sort of pg_constraint dependencies.
  * - Retention: keeps the newest N snapshots, deletes older ones.
  * - Never runs concurrently with itself (in-process single-flight lock).
+ *
+ * LOCAL FALLBACK (100% local): if Appwrite env (ENDPOINT/PROJECT_ID/API_KEY) is
+ * not set, snapshots are stored locally under /tmp/voteweb-backups as JSON files.
+ * list/download/prune operate on the filesystem instead of Appwrite. Keeps
+ * Appwrite path when configured (prod), but local works without any keys.
  */
 
 const { Client, Storage, ID, Permission, Role } = require('node-appwrite');
 const { InputFile } = require('node-appwrite/file');
+const fs = require('fs');
+const path = require('path');
 
 const BACKUP_BUCKET_DEFAULT = 'db-backups';
+const LOCAL_BACKUP_DIR = process.env.LOCAL_BACKUP_DIR || '/tmp/voteweb-backups';
 
 /** Tables excluded from snapshots (session/state noise, not user data). */
 const EXCLUDED_TABLES = new Set([
@@ -31,6 +39,25 @@ const EXCLUDED_TABLES = new Set([
 ]);
 
 const RETENTION_DEFAULT = 14;
+
+function isAppwriteConfigured() {
+  return Boolean(
+    process.env.APPWRITE_ENDPOINT &&
+      process.env.APPWRITE_PROJECT_ID &&
+      process.env.APPWRITE_API_KEY
+  );
+}
+
+function ensureBackupDir() {
+  if (!fs.existsSync(LOCAL_BACKUP_DIR)) {
+    fs.mkdirSync(LOCAL_BACKUP_DIR, { recursive: true });
+  }
+}
+
+function localBaseUrl() {
+  const port = process.env.PORT || 3000;
+  return process.env.LOCAL_BACKUP_BASE_URL || `http://localhost:${port}`;
+}
 
 function backupConfig() {
   const endpoint = process.env.APPWRITE_ENDPOINT;
@@ -125,11 +152,31 @@ let inFlight = null;
 async function runBackup(pool) {
   if (inFlight) return inFlight;
   inFlight = (async () => {
-    const { client, bucketId } = backupConfig();
-    const storage = new Storage(client);
     const dbPool = pool || require('../db').pool;
     const snapshot = await buildSnapshot(dbPool);
     const json = JSON.stringify(snapshot);
+    const bytes = Buffer.byteLength(json, 'utf8');
+    const createdAt = snapshot.created_at;
+
+    if (!isAppwriteConfigured()) {
+      // Local fallback: store JSON file under /tmp/voteweb-backups
+      ensureBackupDir();
+      const fileId = ID.unique();
+      const fileName = `voteweb-snapshot-${new Date().toISOString().replace(/[:.]/g, '-')}-${fileId}.json`;
+      const filePath = path.join(LOCAL_BACKUP_DIR, fileName);
+      fs.writeFileSync(filePath, json, 'utf8');
+      console.log(`[local-backup] snapshot stored ${filePath} (${bytes} bytes)`);
+      return {
+        fileId: fileName,
+        url: `${localBaseUrl()}/backups/${fileName}`,
+        bytes,
+        rowCounts: snapshot.row_counts,
+        createdAt,
+      };
+    }
+
+    const { client, bucketId } = backupConfig();
+    const storage = new Storage(client);
     const fileName = `voteweb-snapshot-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     const file = await storage.createFile(
       bucketId,
@@ -140,9 +187,9 @@ async function runBackup(pool) {
     return {
       fileId: file.$id,
       url: `${process.env.APPWRITE_ENDPOINT}/storage/buckets/${bucketId}/files/${file.$id}/view?project=${process.env.APPWRITE_PROJECT_ID}`,
-      bytes: Buffer.byteLength(json, 'utf8'),
+      bytes,
       rowCounts: snapshot.row_counts,
-      createdAt: snapshot.created_at,
+      createdAt,
     };
   })();
   try {
@@ -154,9 +201,28 @@ async function runBackup(pool) {
 
 /**
  * List existing snapshots in the backup bucket (newest first).
+ * Local fallback: reads from /tmp/voteweb-backups.
  * @returns {Promise<Array<{fileId: string, name: string, bytes: number, createdAt: string}>>}
  */
 async function listBackups() {
+  if (!isAppwriteConfigured()) {
+    ensureBackupDir();
+    const files = fs.readdirSync(LOCAL_BACKUP_DIR).filter((f) => f.startsWith('voteweb-snapshot-') && f.endsWith('.json'));
+    const mapped = files.map((name) => {
+      const filePath = path.join(LOCAL_BACKUP_DIR, name);
+      const stat = fs.statSync(filePath);
+      // Prefer mtime as createdAt; try to parse timestamp from filename for stable sorting
+      // filename format: voteweb-snapshot-2026-09-20T...-<id>.json
+      return {
+        fileId: name,
+        name,
+        bytes: stat.size,
+        createdAt: stat.mtime.toISOString(),
+      };
+    });
+    return mapped.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+
   const { client, bucketId } = backupConfig();
   const storage = new Storage(client);
   const res = await storage.listFiles(bucketId, [], 100);
@@ -173,10 +239,37 @@ async function listBackups() {
 
 /**
  * Download a snapshot's JSON.
+ * Local fallback: reads from filesystem.
  * @param {string} fileId
  * @returns {Promise<Object>}
  */
 async function downloadBackup(fileId) {
+  if (!isAppwriteConfigured()) {
+    ensureBackupDir();
+    // fileId may be the full filename (voteweb-snapshot-xxx.json) or an ID substring
+    let filePath = path.join(LOCAL_BACKUP_DIR, fileId);
+    if (!fs.existsSync(filePath)) {
+      // Try to find file containing fileId (handles ID.unique() alone)
+      const candidates = fs.readdirSync(LOCAL_BACKUP_DIR).filter((f) => f.includes(fileId));
+      if (candidates.length === 0) {
+        const err = new Error('Backup snapshot not found.');
+        err.status = 404;
+        err.code = 'BACKUP_NOT_FOUND';
+        throw err;
+      }
+      filePath = path.join(LOCAL_BACKUP_DIR, candidates[0]);
+    }
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) {
+      const err = new Error('Backup snapshot not found.');
+      err.status = 404;
+      err.code = 'BACKUP_NOT_FOUND';
+      throw err;
+    }
+    const content = fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(content);
+  }
+
   const { client, bucketId } = backupConfig();
   const storage = new Storage(client);
   const res = await storage.getFileDownload(bucketId, fileId);
@@ -187,10 +280,26 @@ async function downloadBackup(fileId) {
 
 /**
  * Delete snapshots beyond the newest `keep` ones.
+ * Local fallback: deletes oldest filesystem files.
  * @param {number} [keep]
  * @returns {Promise<{deleted: number, kept: number}>}
  */
 async function pruneBackups(keep = RETENTION_DEFAULT) {
+  if (!isAppwriteConfigured()) {
+    ensureBackupDir();
+    const files = await listBackups();
+    const old = files.slice(keep);
+    for (const f of old) {
+      const filePath = path.join(LOCAL_BACKUP_DIR, f.name);
+      try {
+        fs.unlinkSync(filePath);
+      } catch (e) {
+        console.warn(`[local-backup] failed to delete ${filePath}: ${e.message}`);
+      }
+    }
+    return { deleted: old.length, kept: files.length - old.length };
+  }
+
   const { client, bucketId } = backupConfig();
   const storage = new Storage(client);
   const files = await listBackups();

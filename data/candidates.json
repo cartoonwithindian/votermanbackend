@@ -1,0 +1,68 @@
+[
+  {
+    "id": 9001,
+    "fullName": "Abastin",
+    "position": "Class Representative (Boys)",
+    "department": "TEST",
+    "year": "1st Year",
+    "section": "T1",
+    "email": "abastin443@gmail.com",
+    "profilePhotoUrl": "https://picsum.photos/seed/abastin/400/400",
+    "manifesto": "## Vision\nTo foster collaboration and improve classroom facilities.\n\n## Goals\n- Open communication with professors\n- Regular study resource sharing"
+  },
+  {
+    "id": 9002,
+    "fullName": "Backup WH",
+    "position": "Class Representative (Girls)",
+    "department": "TEST",
+    "year": "1st Year",
+    "section": "T1",
+    "email": "backupwh196@gmail.com",
+    "profilePhotoUrl": "https://picsum.photos/seed/backupwh/400/400",
+    "manifesto": "## Vision\nA supportive and transparent classroom environment.\n\n## Plans\n- Quick grievance resolution\n- Weekly department meetups"
+  },
+  {
+    "id": 9003,
+    "fullName": "Bmtashwin009",
+    "position": "Class Representative (Boys)",
+    "department": "TEST",
+    "year": "1st Year",
+    "section": "T1",
+    "email": "bmtashwin009@gmail.com",
+    "profilePhotoUrl": "https://picsum.photos/seed/bmtashwin/400/400",
+    "manifesto": "## Vision\nTech-driven solutions for classroom challenges.\n\n## Plans\n- Digital feedback forms\n- Peer skill-sharing workshops"
+  },
+  {
+    "id": 9004,
+    "fullName": "Cartoon With Indian",
+    "position": "Class Representative (Boys)",
+    "department": "TEST",
+    "year": "1st Year",
+    "section": "T1",
+    "email": "cartoonwithindian@gmail.com",
+    "profilePhotoUrl": "https://picsum.photos/seed/cartoon/400/400",
+    "manifesto": "## Vision\nEncouraging creativity and active participation.\n\n## Goals\n- Inter-department events\n- Creative arts workshops"
+  },
+  {
+    "id": 9005,
+    "fullName": "Madea Official",
+    "position": "Class Representative (Girls)",
+    "department": "TEST",
+    "year": "1st Year",
+    "section": "T1",
+    "email": "madea.official1@gmail.com",
+    "profilePhotoUrl": "https://picsum.photos/seed/madea/400/400",
+    "manifesto": "## Vision\nInclusive, transparent leadership for all students.\n\n## Actions\n- Accessible doubt clearing sessions\n- Student well-being initiatives"
+  },
+  {
+    "id": 9006,
+    "fullName": "Ctrlpluss9",
+    "position": "Class Representative (Boys)",
+    "department": "TEST",
+    "year": "1st Year",
+    "section": "T1",
+    "email": "ctrlpluss9@gmail.com",
+    "profilePhotoUrl": "https://picsum.photos/seed/ctrlplus/400/400",
+    "manifesto": "## Vision\nMaximizing student productivity and connectivity.\n\n## Goals\n- Centralized academic drive\n- Monthly open discussions"
+  }
+]
