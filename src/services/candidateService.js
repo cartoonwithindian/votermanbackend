@@ -293,8 +293,48 @@ class CandidateService {
    * Find all candidates for a position
    */
   async findByPositionId(positionId, options = {}) {
+    // Fallback: serve uploaded JSON routed to the matching seat (gender + cohort).
+    // JSON candidates carry no real position_id, so route them via the position's
+    // gender + constituency cohort rather than raw position_id comparison.
+    const jsonFallback = async () => {
+      if (!jsonStore.hasJsonOverride()) return null;
+      const raw = jsonStore.readJsonCandidates();
+      if (!raw || !Array.isArray(raw)) return null;
+      const mapped = raw.map((c, idx) => jsonStore.mapJsonToRow(c, idx));
+      const { limit = 100, offset = 0 } = options;
+      let isGirlSeat = false;
+      let cohort = null;
+      try {
+        const positionService = require('./positionService');
+        const constituencyService = require('./constituencyService');
+        const position = await positionService.findById(positionId);
+        const posName = String(position?.name || '');
+        isGirlSeat = /girls|female/i.test(posName) || String(position?.gender).toLowerCase() === 'female';
+        if (position && position.constituency_id) {
+          const ct = await constituencyService.findById(position.constituency_id);
+          if (ct) cohort = { department: ct.department, year: ct.year, section: ct.section || '' };
+        }
+      } catch (_) {}
+      if (!cohort) return null;
+      const norm = (v) => {
+        const s = String(v ?? '').trim().toLowerCase();
+        return (s === '-' || s === '') ? '' : s;
+      };
+      const cohortYear = normalizeYear(cohort.year);
+      let filtered = mapped.filter(r =>
+        norm(r.department) === norm(cohort.department) &&
+        norm(normalizeYear(r.year)) === norm(cohortYear) &&
+        norm(r.section || '') === norm(cohort.section || '')
+      );
+      filtered = filtered.filter(r => {
+        const rGirl = /girls|female/i.test(String(r.position_name || '')) || String(r.gender).toLowerCase() === 'female';
+        return rGirl === isGirlSeat;
+      });
+      return filtered.slice(offset, offset + limit);
+    };
+
     if (isMongoOnly) {
-      // Mongo-only: attempt to read from Mongo candidates or return [] to avoid 500
+      // Mongo-only: read from Mongo candidates (real voteable rows take precedence)
       try {
         const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
         if (uri) {
@@ -302,18 +342,18 @@ class CandidateService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            // Check voteweb.candidates or mongoStore
+            let docs = null;
             if (await mongoStore.hasMongoCandidates()) {
               const rows = await mongoStore.readMongoCandidates();
-              if (rows && rows.length) {
-                // Filter by positionId if available in row
-                const filtered = rows.filter(r => String(r.position_id ?? r.positionId) === String(positionId));
-                return filtered.slice(0, options.limit || 100);
-              }
+              if (rows && rows.length) docs = rows.filter(r => String(r.position_id ?? r.positionId) === String(positionId));
             }
-            const col = client.db(getMongoDbName()).collection('candidates');
-            const docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }] }).limit(options.limit || 100).skip(options.offset || 0).toArray();
-            return docs.map(d => ({ id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true }));
+            if (!docs || !docs.length) {
+              const col = client.db(getMongoDbName()).collection('candidates');
+              docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }] }).limit(options.limit || 100).skip(options.offset || 0).toArray();
+            }
+            if (docs && docs.length) {
+              return docs.map(d => ({ id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true }));
+            }
           } finally {
             await client.close().catch(() => {});
           }
@@ -321,8 +361,10 @@ class CandidateService {
       } catch (e) {
         console.warn('[candidateService] findByPositionId mongo fallback to []:', e.message);
       }
-      return [];
+      const fb = await jsonFallback();
+      return fb || [];
     }
+
     const { activeOnly = true, limit = 100, offset = 0 } = options;
 
     let query = 'SELECT * FROM candidates WHERE position_id = $1';
@@ -336,7 +378,8 @@ class CandidateService {
     params.push(limit, offset);
 
     const result = await db.query(query, params);
-    return result.rows;
+    if (result.rows.length) return result.rows;
+    return (await jsonFallback()) || [];
   }
 
   /**
@@ -368,6 +411,38 @@ class CandidateService {
     }
     const result = await db.query(
       'SELECT * FROM candidates WHERE id = $1',
+      [id]
+    );
+    return result.rows[0] || null;
+  }
+
+  async deleteById(id) {
+    if (isMongoOnly) {
+      try {
+        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+        if (uri) {
+          const { MongoClient, ObjectId } = require('mongodb');
+          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+          await client.connect();
+          try {
+            const col = client.db(getMongoDbName()).collection('candidates');
+            let res = null;
+            try { if (ObjectId.isValid(String(id))) res = await col.findOneAndDelete({ _id: new ObjectId(String(id)) }); } catch (_) {}
+            if (!res || !res.value) res = await col.findOneAndDelete({ $or: [{ id: String(id) }, { _id: String(id) }] });
+            if (!res || !res.value) return null;
+            const d = res.value;
+            return { id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, department: d.department ?? null, year: d.year ?? null, section: d.section ?? null, gender: d.gender ?? null, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true };
+          } finally {
+            await client.close().catch(() => {});
+          }
+        }
+      } catch (e) {
+        console.warn('[candidateService] deleteById mongo fallback null:', e.message);
+      }
+      return null;
+    }
+    const result = await db.query(
+      'DELETE FROM candidates WHERE id = $1 RETURNING *',
       [id]
     );
     return result.rows[0] || null;
@@ -410,11 +485,12 @@ class CandidateService {
   }
 
   /**
-   * Create a ballot row in `candidates` for an approved applicant.
-   * Used by approval/assign-ballot flows. Duplicate (position_id, name)
-   * surfaces as 23505 for the caller to swallow; unknown position as 23503.
+   * Check whether a candidate with the same name already exists on a position.
+   * Used by the Add-to-Ballot flow to keep inserts idempotent across re-runs.
    */
-  async create({ position_id, name, description = null, image_url = null }) {
+  async candidateExists(positionId, name) {
+    const target = String(name || '').trim().toLowerCase();
+    if (!target) return false;
     if (isMongoOnly) {
       try {
         const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
@@ -424,9 +500,42 @@ class CandidateService {
           await client.connect();
           try {
             const col = client.db(getMongoDbName()).collection('candidates');
-            const doc = { position_id, positionId: position_id, name, description, image_url: image_url, imageUrl: image_url, display_order: 1, displayOrder: 1, is_active: true, isActive: true, created_at: new Date(), createdAt: new Date() };
+            const docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }] }).toArray();
+            return docs.some(d => String(d.name || '').trim().toLowerCase() === target);
+          } finally {
+            await client.close().catch(() => {});
+          }
+        }
+      } catch (e) {
+        console.warn('[candidateService] candidateExists mongo fallback false:', e.message);
+      }
+      return false;
+    }
+    const result = await db.query(
+      'SELECT 1 FROM candidates WHERE position_id = $1 AND LOWER(name) = LOWER($2) LIMIT 1',
+      [positionId, name]
+    );
+    return result.rows.length > 0;
+  }
+
+  /**
+   * Create a ballot row in `candidates` for an approved applicant.
+   * Used by approval/assign-ballot flows. Duplicate (position_id, name)
+   * surfaces as 23505 for the caller to swallow; unknown position as 23503.
+   */
+  async create({ position_id, name, description = null, image_url = null, department = null, year = null, section = null, gender = null, manifest = null }) {
+    if (isMongoOnly) {
+      try {
+        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+        if (uri) {
+          const { MongoClient } = require('mongodb');
+          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+          await client.connect();
+          try {
+            const col = client.db(getMongoDbName()).collection('candidates');
+            const doc = { position_id, positionId: position_id, name, description: description ?? manifest, image_url: image_url, imageUrl: image_url, department: department ?? null, year: year ?? null, section: section ?? null, gender: gender ?? null, display_order: 1, displayOrder: 1, is_active: true, isActive: true, created_at: new Date(), createdAt: new Date() };
             const res = await col.insertOne(doc);
-            return { id: String(res.insertedId), position_id, name, description, image_url, display_order: 1, is_active: true };
+            return { id: String(res.insertedId), position_id, name, description: description ?? manifest, image_url, department, year, section, gender, display_order: 1, is_active: true };
           } finally {
             await client.close().catch(() => {});
           }
@@ -435,7 +544,7 @@ class CandidateService {
         console.warn('[candidateService] create mongo fallback mock:', e.message);
       }
       // Mongo-only without URI: return mock to avoid 500
-      return { id: `mock-${Date.now()}`, position_id, name, description, image_url, display_order: 1, is_active: true };
+      return { id: `mock-${Date.now()}`, position_id, name, description: description ?? manifest, image_url, department, year, section, gender, display_order: 1, is_active: true };
     }
     const result = await db.query(
       `INSERT INTO candidates (position_id, name, description, image_url, display_order)

@@ -11,6 +11,10 @@
 
 const candidateService = require('../services/candidateService');
 const jsonStore = require('../services/jsonCandidateStore');
+const constituencyService = require('../services/constituencyService');
+const positionService = require('../services/positionService');
+const electionService = require('../services/electionService');
+const { normalizeYear } = require('../utils/yearNormalizer');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class CandidateController {
@@ -234,6 +238,144 @@ class CandidateController {
     try {
       const deleted = jsonStore.deleteJsonCandidates();
       return res.json({ success: true, deleted, message: deleted ? 'JSON override removed, DB is now active' : 'No JSON to delete' });
+    } catch (e) { next(e); }
+  }
+
+  async addToBallot(req, res, next) {
+    try {
+      const raw = jsonStore.readJsonCandidates();
+      if (!raw || !Array.isArray(raw) || raw.length === 0) {
+        return res.status(400).json({ error: 'Bad Request', message: 'No JSON candidates uploaded. Upload a JSON file first.' });
+      }
+
+      let electionId = req.body.election_id;
+      if (electionId === undefined || electionId === null || String(electionId).trim() === '') {
+        const elections = await electionService.findAll({ limit: 100 });
+        const sortKey = (e) => {
+          const num = Number(e.id);
+          if (Number.isFinite(num)) return num;
+          const ts = new Date(e.created_at || e.createdAt || 0).getTime();
+          return Number.isFinite(ts) ? ts : 0;
+        };
+        const pool = (elections || []).filter(e => ['OPEN', 'DRAFT', 'SCHEDULED'].includes(String(e.status || '').toUpperCase()));
+        const target = pool.find(e => String(e.status || '').toUpperCase() === 'OPEN')
+          || [...pool].sort((a, b) => sortKey(b) - sortKey(a))[0];
+        if (!target) {
+          return res.status(400).json({ error: 'Bad Request', message: 'No election available. Create or open an election first.' });
+        }
+        electionId = target.id;
+      }
+
+      const added = [];
+      const skipped = [];
+      const cohorts = {};
+
+      for (const c of raw) {
+        const name = String(c.fullName || c.FullName || c.name || '').trim();
+        if (!name) {
+          skipped.push({ name: c.fullName || c.FullName || c.name || 'Unknown', reason: 'invalid name' });
+          continue;
+        }
+
+        const department = String(c.department || c.Department || '').trim();
+        const year = normalizeYear(c.year || c.Year) || '';
+        const section = String(c.section ?? c.Section ?? '').trim();
+        if (!department || !year) {
+          skipped.push({ name, reason: 'missing department or year' });
+          continue;
+        }
+
+        const cohortKey = [String(electionId), department, year, section].join('|');
+        if (!cohorts[cohortKey]) {
+          let constituency = await constituencyService.findMatching({ electionId, department, year, section, activeOnly: false });
+          if (!constituency) {
+            constituency = await constituencyService.create({ electionId, department, year, section });
+          }
+          cohorts[cohortKey] = constituency || null;
+        }
+        const constituency = cohorts[cohortKey];
+        if (!constituency || !constituency.id) {
+          skipped.push({ name, reason: 'constituency unavailable' });
+          continue;
+        }
+
+        const positions = await positionService.findByConstituencyId(constituency.id);
+        const seat = this.getCrSeat(positions, c);
+        if (!seat || !seat.id) {
+          skipped.push({ name, reason: 'invalid seat' });
+          continue;
+        }
+
+        if (await candidateService.candidateExists(seat.id, name)) {
+          skipped.push({ name, reason: 'already on ballot', position_id: seat.id, position_name: seat.name });
+          continue;
+        }
+
+        const created = await candidateService.create({
+          position_id: seat.id,
+          name,
+          description: c.manifesto || c.Manifesto || c.bio || '',
+          image_url: c.profilePhotoUrl || c.profile_photo_url || c.image_url || '',
+          department,
+          year,
+          section,
+          gender: c.gender || null,
+        });
+
+        added.push({
+          id: created.id,
+          name,
+          position_id: seat.id,
+          position_name: seat.name,
+          constituency_id: constituency.id,
+          department,
+          year,
+          section,
+          gender: c.gender || null,
+        });
+      }
+
+      return res.json({
+        success: true,
+        added,
+        skipped,
+        addedCount: added.length,
+        skippedCount: skipped.length,
+        message: `Added ${added.length} candidates to ballot (${skipped.length} skipped)`,
+      });
+    } catch (e) { next(e); }
+  }
+
+  getCrSeat(positions, cand) {
+    const candGender = String(cand.gender || '').trim().toLowerCase();
+    const candPos = String(cand.position || cand.position_name || '');
+    const wantGirl = candGender === 'female' || candGender === 'f' || /girl|female/i.test(candPos);
+    const seats = Array.isArray(positions) ? positions.filter(p => p && p.id != null) : [];
+    if (wantGirl) {
+      return seats.find(p => /girl|female/i.test(String(p.name || '')))
+        || seats.find(p => String(p.gender || '').toLowerCase() === 'female')
+        || seats[seats.length - 1]
+        || null;
+    }
+    return seats.find(p => /boy|male/i.test(String(p.name || '')) && !/girl|female/i.test(String(p.name || '')))
+      || seats.find(p => String(p.gender || '').toLowerCase() === 'male')
+      || seats.find(p => !/girl|female/i.test(String(p.name || '')) && String(p.gender || '').toLowerCase() !== 'female')
+      || seats[0]
+      || null;
+  }
+
+  async removeBallotCandidate(req, res, next) {
+    try {
+      const { id } = req.params;
+      if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
+        return res.status(400).json({ error: 'Bad Request', message: 'Invalid candidate ID' });
+      }
+      const targetId = isMongoOnly ? id : parseInt(id);
+      const deleted = await candidateService.deleteById(targetId);
+      if (!deleted) {
+        return res.status(404).json({ error: 'Not Found', message: 'Candidate not found' });
+      }
+      return res.json({ success: true, message: 'Candidate removed from ballot' });
     } catch (e) { next(e); }
   }
 }

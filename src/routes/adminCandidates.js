@@ -18,4 +18,10 @@ router.post('/json', requireAdmin, csrfProtection, candidateController.uploadJso
 router.get('/json', requireAdmin, candidateController.getJson.bind(candidateController));
 router.delete('/json', requireAdmin, csrfProtection, candidateController.deleteJson.bind(candidateController));
 
+// Add-to-ballot: materialize uploaded JSON candidates into voteable DB ballot rows
+router.post('/json/add-to-ballot', requireAdmin, csrfProtection, candidateController.addToBallot.bind(candidateController));
+
+// Remove a single ballot candidate (must come AFTER /json routes, causes 404 otherwise)
+router.delete('/ballot/:id', requireAdmin, csrfProtection, candidateController.removeBallotCandidate.bind(candidateController));
+
 module.exports = router;
