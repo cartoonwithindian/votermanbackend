@@ -5,14 +5,12 @@
  */
 
 const db = require('../db');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 function getMongoUri() {
   return process.env.MONGODB_URI || process.env.MONGODB_URL || null;
-}
-function getMongoDbName() {
-  return getMongoDbName();
 }
 
 async function mongoFindPositions({ filter = {}, limit = 100, offset = 0, sort = { display_order: 1, _id: 1 } } = {}) {
