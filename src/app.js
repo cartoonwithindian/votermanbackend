@@ -64,11 +64,18 @@ app.use(helmet({
 // https://s1.students.made-a.tech/admin/... (Render routes that host to the same
 // service) must NOT get a 500/CORS rejection. Also allow clerk.* hosts for the
 // Clerk Frontend API / JWKS and the onrender fallbacks.
+//
+// The Clerk custom domain is set per-deployment via CLERK_APP_DOMAIN (the
+// domain encoded in the publishable key, e.g. clerk.students.made-a.tech).
+// The Clerk satellite (clerk.s1.<host>) is derived from it. To run on a new
+// domain, just update CLERK_APP_DOMAIN in the env file.
+const clerkAppDomain = process.env.CLERK_APP_DOMAIN || 'clerk.students.made-a.tech';
+const clerkS1Domain = process.env.CLERK_APP_DOMAIN_S1 || `clerk.s1.${clerkAppDomain.split('.').slice(1).join('.')}`;
 const builtinProdOrigins = [
   'https://students.made-a.tech',
   'https://s1.students.made-a.tech',
-  'https://clerk.students.made-a.tech',
-  'https://clerk.s1.students.made-a.tech',
+  `https://${clerkAppDomain}`,
+  `https://${clerkS1Domain}`,
   'https://votermanfrontend.onrender.com',
   'https://votermanbackend.onrender.com',
   'https://made-a.tech',
