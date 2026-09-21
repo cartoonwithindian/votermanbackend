@@ -44,7 +44,7 @@ const { loadSession } = require('./middleware/loadSession');
 const { requireAuth } = require('./middleware/requireAuth');
 const { requireAdmin } = require('./middleware/requireAdmin');
 const { httpMetricsMiddleware, metricsHandler, buildMonitoringSummary } = require('./monitoring/metrics');
-const { getMongoDbName } = require('../utils/mongoDbName');
+const { getMongoDbName } = require('./utils/mongoDbName');
 
 const app = express();
 const isDev = process.env.NODE_ENV !== 'production';
