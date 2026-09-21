@@ -82,11 +82,18 @@ function validateCandidates(arr) {
 }
 
 function filterJsonCandidates(rows, { gender, department, year, section, limit = 100, offset = 0 }) {
+  const { normalizeYear } = require('../utils/yearNormalizer');
   let filtered = [...rows];
   if (gender && gender !== 'all') filtered = filtered.filter(r => r.gender === gender);
   if (department && department !== 'all') filtered = filtered.filter(r => r.department === department);
-  if (year && year !== 'all') filtered = filtered.filter(r => r.year === year);
-  if (section && section !== 'all') filtered = filtered.filter(r => r.section === section);
+  if (year && year !== 'all') {
+    const normYear = normalizeYear(year);
+    filtered = filtered.filter(r => normalizeYear(r.year) === normYear);
+  }
+  if (section && section !== 'all') {
+    const normSection = String(section).trim().toLowerCase();
+    filtered = filtered.filter(r => String(r.section || '').trim().toLowerCase() === normSection);
+  }
   const total = filtered.length;
   filtered = filtered.slice(offset, offset + limit);
   return { rows: filtered, total };
