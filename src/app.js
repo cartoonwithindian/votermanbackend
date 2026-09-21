@@ -58,48 +58,37 @@ app.use(helmet({
   contentSecurityPolicy: isDev ? false : undefined,
 }));
 
-// CORS configuration
-// s1.students.made-a.tech is Clerk's satellite/JWKS host (clerk.s1...) — the Next.js
-// app itself should be served from students.made-a.tech only, but users who hit
-// https://s1.students.made-a.tech/admin/... (Render routes that host to the same
-// service) must NOT get a 500/CORS rejection. Also allow clerk.* hosts for the
-// Clerk Frontend API / JWKS and the onrender fallbacks.
-//
-// The Clerk custom domain is set per-deployment via CLERK_APP_DOMAIN (the
-// domain encoded in the publishable key, e.g. clerk.students.made-a.tech).
-// The Clerk satellite (clerk.s1.<host>) is derived from it. To run on a new
-// domain, just update CLERK_APP_DOMAIN in the env file.
-const clerkAppDomain = process.env.CLERK_APP_DOMAIN || 'clerk.students.made-a.tech';
-const clerkS1Domain = process.env.CLERK_APP_DOMAIN_S1 || `clerk.s1.${clerkAppDomain.split('.').slice(1).join('.')}`;
-const builtinProdOrigins = [
-  'https://students.made-a.tech',
-  'https://s1.students.made-a.tech',
-  `https://${clerkAppDomain}`,
-  `https://${clerkS1Domain}`,
-  'https://votermanfrontend.onrender.com',
-  'https://votermanbackend.onrender.com',
-  'https://made-a.tech',
-  'https://www.made-a.tech',
-];
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3001')
-  .split(',')
-  .map(o => o.trim())
-  .filter(Boolean)
-  .concat(['http://10.139.255.165:3001', 'http://127.0.0.1:3001'])
-  .concat(builtinProdOrigins);
+// CORS configuration.
+// No origins are hardcoded. Every allowed origin comes from env so the app
+// works on any deployment without code changes:
+//   - CORS_ORIGIN           comma-separated list of allowed origins
+//   - CORS_ORIGIN_PATTERNS  optional wildcard/regex patterns (see below)
+//   - APP_URL               canonical app URL (added automatically)
+//   - CLERK_APP_DOMAIN      Clerk custom front-end API domain (added automatically)
+//   - CLERK_APP_DOMAIN_S1   optional secondary Clerk domain (added automatically)
+const clerkAppDomain = process.env.CLERK_APP_DOMAIN || '';
+const clerkS1Domain = process.env.CLERK_APP_DOMAIN_S1 || '';
+const appOrigin = (process.env.APP_URL || '').replace(/\/+$/, '');
+const allowedOrigins = Array.from(new Set(
+  [
+    ...(process.env.CORS_ORIGIN || '')
+      .split(',')
+      .map(o => o.trim())
+      .filter(Boolean),
+    'http://127.0.0.1:3001',
+    appOrigin,
+    clerkAppDomain && `https://${clerkAppDomain.replace(/^https?:\/\//, '')}`,
+    clerkS1Domain && `https://${clerkS1Domain.replace(/^https?:\/\//, '')}`,
+  ].filter(Boolean)
+));
 
 const corsOptions = {
   origin: (origin, cb) => {
     // Allow requests with no origin (curl, Postman, server-to-server)
     if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
-    // Permissive fallback: any HTTPS subdomain of made-a.tech or onrender.com.
-    // This covers students.made-a.tech, s1.students..., clerk.s1..., plus any
-    // future Render preview URL without requiring an env redeploy.
-    if (/^https:\/\/(?:[a-z0-9-]+\.)*made-a\.tech$/.test(origin)) return cb(null, true);
-    if (/^https:\/\/(?:[a-z0-9-]+\.)*onrender\.com$/.test(origin)) return cb(null, true);
 
-    // Check for pattern-based origins (e.g., *.vercel.app)
+    // Check for pattern-based origins (e.g., *.vercel.app) configured via env
     const patternOrigins = process.env.CORS_ORIGIN_PATTERNS
       ? process.env.CORS_ORIGIN_PATTERNS.split(',').map(p => p.trim())
       : [];
