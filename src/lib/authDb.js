@@ -6,6 +6,10 @@
 
 const db = require('../db');
 const config = require('../config');
+const { getMongoDbName } = require('../utils/mongoDbName');
+
+// Mongo-only (Atlas M10): authenticate against the Mongo students collection.
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 /**
  * Record an authentication audit event
@@ -33,6 +37,30 @@ async function recordAudit(event, { studentId = null, ip = null, metadata = {} }
  * @returns {Promise<object|null>} - Student record or null
  */
 async function findStudentByIdentifierOrEmail(identifier) {
+  if (isMongoOnly) {
+    try {
+      const { MongoClient } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL, { serverSelectionTimeoutMS: 4000, connectTimeoutMS: 4000 });
+      await client.connect();
+      try {
+        const identifierTrim = String(identifier || '').trim();
+        const doc = await client.db(getMongoDbName()).collection('students').findOne({
+          $or: [
+            { externalId: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
+            { email: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
+            { currentLoginEmail: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
+            { officialEmail: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
+          ],
+        });
+        return mongoStudentToRow(doc);
+      } finally {
+        await client.close().catch(() => {});
+      }
+    } catch (error) {
+      console.error('[authDb] Mongo student lookup failed:', error.message);
+      return null;
+    }
+  }
   const result = await db.query(
     `SELECT id, external_id, name, email, role, password_hash, password_change_required,
             mfa_enabled, mfa_secret_encrypted, failed_login_attempts, locked_until,
@@ -42,6 +70,33 @@ async function findStudentByIdentifierOrEmail(identifier) {
     [identifier],
   );
   return result.rows[0] || null;
+}
+
+// Escape user input for use inside a MongoDB $regex literal
+function escapeRegex(s) {
+  return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Map a Mongo student doc onto the Postgres row shape the auth routes expect
+function mongoStudentToRow(doc) {
+  if (!doc) return null;
+  return {
+    id: doc._id ?? doc.postgresId ?? doc.id,
+    external_id: doc.externalId,
+    name: doc.name,
+    email: doc.email,
+    role: doc.role,
+    password_hash: doc.passwordHash ?? doc.password_hash ?? null,
+    password_change_required: doc.passwordChangeRequired ?? false,
+    mfa_enabled: doc.mfaEnabled ?? false,
+    mfa_secret_encrypted: doc.mfaSecretEncrypted ?? null,
+    failed_login_attempts: doc.failedLoginAttempts ?? 0,
+    locked_until: doc.lockedUntil ?? null,
+    last_login_at: doc.lastLoginAt ?? null,
+    is_active: doc.isActive ?? true,
+    created_at: doc.createdAt ?? null,
+    updated_at: doc.updatedAt ?? null,
+  };
 }
 
 /**
