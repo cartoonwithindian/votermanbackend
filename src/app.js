@@ -370,6 +370,7 @@ app.use((err, req, res, next) => {
 
   // Don't expose internal errors in production
   const isDev = process.env.NODE_ENV !== 'production';
+  if (err) console.error('ERR-HANDLER-STACK >', (err.stack || err.message || err));
 
   // Handle specific error types
   if (err.name === 'SyntaxError' && err.status === 400 && 'body' in err) {
@@ -392,7 +393,7 @@ app.use((err, req, res, next) => {
   // Default error response
   res.status(err.status || 500).json({
     error: err.status === 404 ? 'Not Found' : 'Internal Server Error',
-    message: isDev ? err.message : (err.status >= 500 ? 'An internal server error occurred.' : err.message),
+    message: err.message,
     code: err.code || 'INTERNAL_ERROR',
   });
 });
