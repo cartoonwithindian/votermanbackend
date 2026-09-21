@@ -4,6 +4,7 @@
  */
 
 const db = require('../db');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class NotificationService {
@@ -19,7 +20,7 @@ class NotificationService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('notifications');
+            const col = client.db(getMongoDbName()).collection('notifications');
             const doc = { user_id: userId, userId, type, category, priority, title, message, action_url: actionUrl, actionUrl, action_label: actionLabel, actionLabel, is_read: false, isRead: false, created_at: new Date(), createdAt: new Date() };
             const res = await col.insertOne(doc);
             return { id: res.insertedId, user_id: userId, type, category, priority, title, message, action_url: actionUrl, action_label: actionLabel, is_read: false, created_at: doc.created_at };
@@ -59,7 +60,7 @@ class NotificationService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('notifications');
+            const col = client.db(getMongoDbName()).collection('notifications');
             const docs = uniqueIds.map(uid => ({ user_id: uid, userId: uid, type, category, priority, title, message, action_url: actionUrl, actionUrl, action_label: actionLabel, actionLabel, is_read: false, isRead: false, created_at: new Date(), createdAt: new Date() }));
             if (docs.length) await col.insertMany(docs);
             return uniqueIds.length;
@@ -137,7 +138,7 @@ class NotificationService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('notifications');
+            const col = client.db(getMongoDbName()).collection('notifications');
             let doc = null;
             try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
@@ -171,7 +172,7 @@ class NotificationService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('notifications');
+            const col = client.db(getMongoDbName()).collection('notifications');
             let res = null;
             try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)), $or: [{ user_id: userId }, { userId }] }, { $set: { is_read: true, isRead: true, read_at: new Date(), readAt: new Date() } }, { returnDocument: 'after' }); } catch (_) {}
             if (!res || !res.value) res = await col.findOneAndUpdate({ $or: [{ id: String(id) }, { _id: String(id) }] }, { $set: { is_read: true, isRead: true, read_at: new Date(), readAt: new Date() } }, { returnDocument: 'after' });
@@ -209,7 +210,7 @@ class NotificationService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('notifications');
+            const col = client.db(getMongoDbName()).collection('notifications');
             await col.updateMany({ $or: [{ user_id: userId }, { userId }], is_read: false }, { $set: { is_read: true, isRead: true, read_at: new Date(), readAt: new Date() } });
           } finally {
             await client.close().catch(() => {});

@@ -44,6 +44,7 @@ const { loadSession } = require('./middleware/loadSession');
 const { requireAuth } = require('./middleware/requireAuth');
 const { requireAdmin } = require('./middleware/requireAdmin');
 const { httpMetricsMiddleware, metricsHandler, buildMonitoringSummary } = require('./monitoring/metrics');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 const app = express();
 const isDev = process.env.NODE_ENV !== 'production';
@@ -162,7 +163,7 @@ app.get('/api/health/db', async (req, res) => {
       const { MongoClient } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI);
       await client.connect();
-      await client.db(process.env.MONGODB_DB || 'voteweb').command({ ping: 1 });
+      await client.db(getMongoDbName()).command({ ping: 1 });
       await client.close();
       res.json({
         status: 'ok',

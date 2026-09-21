@@ -28,12 +28,12 @@ class CandidateApplicationController {
         });
       }
 
-      // Validate required fields. CR applications for sectioned courses (BBA,
-      // BCA) require a section so the constituency seat can be resolved at
-      // approval; sectionless courses (MBA, MCA, BCom) may omit it.
+      // Validate required fields. Only fields we actually have in student
+      // data are required: name, department, year, email, gender, bio,
+      // manifesto. enrollmentNumber, phone, age, dateOfBirth, aadharNumber
+      // are optional (defaulted to ""/null).
       const requiredFields = [
-        'fullName', 'enrollmentNumber', 'department', 'year', 'email', 'phone',
-        'bio', 'manifesto', 'age', 'dateOfBirth', 'gender', 'aadharNumber'
+        'fullName', 'department', 'year', 'email', 'gender', 'bio', 'manifesto'
       ];
 
       const department = String(applicationData.department || '').trim();
@@ -59,16 +59,6 @@ class CandidateApplicationController {
         return res.status(400).json({
           success: false,
           message: 'Invalid email format',
-        });
-      }
-
-      // Phone validation
-      const phoneRegex = /^[0-9]{10,15}$/;
-      const cleanPhone = applicationData.phone.replace(/\D/g, '');
-      if (!phoneRegex.test(cleanPhone)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid phone number format',
         });
       }
 

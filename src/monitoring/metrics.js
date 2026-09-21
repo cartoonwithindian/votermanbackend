@@ -39,6 +39,7 @@
 
 const client = require('prom-client');
 const crypto = require('node:crypto');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 // ---------------------------------------------------------------------------
 // Registry + default Node metrics (idempotent init)
@@ -250,7 +251,7 @@ async function refreshBusinessMetrics() {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
         try {
-          const dbName = process.env.MONGODB_DB || 'voteweb';
+          const dbName = getMongoDbName();
           const [electionsCount, studentsCount, appsCount] = await Promise.all([
             client.db(dbName).collection('elections').countDocuments({ status: 'OPEN' }).catch(() => 0),
             client.db(dbName).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students').countDocuments({ $or: [{ role: 'STUDENT' }, { role: { $exists: false } }] }).catch(() => 0),
@@ -427,7 +428,7 @@ async function buildMonitoringSummary() {
       if (uri) {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        await client.db(process.env.MONGODB_DB || 'voteweb').command({ ping: 1 });
+        await client.db(getMongoDbName()).command({ ping: 1 });
         await client.close().catch(() => {});
         dbConnected = true;
       } else {

@@ -5,6 +5,7 @@
 
 const db = require('../db');
 const notificationService = require('./notificationService');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class AnnouncementService {
@@ -64,7 +65,7 @@ class AnnouncementService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('announcements');
+            const col = client.db(getMongoDbName()).collection('announcements');
             const filter = {};
             if (publishedOnly) filter.is_published = true;
             if (electionId) filter.election_id = parseInt(electionId);
@@ -138,7 +139,7 @@ class AnnouncementService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('announcements');
+            const col = client.db(getMongoDbName()).collection('announcements');
             let doc = null;
             try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });

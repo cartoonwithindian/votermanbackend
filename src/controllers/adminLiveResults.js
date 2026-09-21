@@ -6,6 +6,7 @@
  * rankings without a page refresh. Mounted behind requireAdmin in app.js.
  */
 const db = require('../db');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 async function getLive(req, res) {
@@ -14,7 +15,7 @@ async function getLive(req, res) {
       const { MongoClient } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
       await client.connect();
-      const dbMongo = client.db(process.env.MONGODB_DB || 'voteweb');
+      const dbMongo = client.db(getMongoDbName());
       const [studentsTotal, studentsActive, electionsTotal, electionsOpen, candidatesTotal, votesTotal, pendingApps] = await Promise.all([
         dbMongo.collection('students').countDocuments({ role: 'STUDENT' }),
         dbMongo.collection('students').countDocuments({ role: 'STUDENT', isActive: true }),

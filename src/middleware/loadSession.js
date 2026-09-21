@@ -12,6 +12,8 @@
 const db = require('../db');
 const { hashToken } = require('../lib/crypto');
 const { SESSION_COOKIE } = require('../lib/cookies');
+const { normalizeYear } = require('../utils/yearNormalizer');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!process.env.MONGODB_URI;
 
 /**
@@ -68,7 +70,7 @@ async function loadSession(req, res, next) {
       const { MongoClient } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI);
       await client.connect();
-      const dbMongo = client.db(process.env.MONGODB_DB || 'voteweb');
+      const dbMongo = client.db(getMongoDbName());
       const hashedSession = hashToken(sessionId);
       const sess = await dbMongo.collection('sessions').findOne({ sessionHash: hashedSession, revokedAt: null, expiresAt: { $gt: new Date() } });
       if (!sess) { await client.close(); return next(); }
@@ -94,7 +96,7 @@ async function loadSession(req, res, next) {
         rollNumber: studentDoc.rollNumber || null,
         mobileNumber: studentDoc.mobileNumber || null,
         department: studentDoc.department || null,
-        year: studentDoc.year || null,
+        year: normalizeYear(studentDoc.year) || null,
         section: studentDoc.section || null,
         role: studentDoc.role,
         passwordChangeRequired: studentDoc.passwordChangeRequired,
@@ -166,7 +168,7 @@ async function loadSession(req, res, next) {
       rollNumber: row.roll_number || null,
       mobileNumber: row.mobile_number || null,
       department: row.department || null,
-      year: row.year_or_semester || null,
+      year: normalizeYear(row.year_or_semester) || null,
       section: row.section || null,
 
       // Role (ADMIN, CANDIDATE, STUDENT)

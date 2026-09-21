@@ -8,6 +8,7 @@ const db = require('../db');
 const { hashToken } = require('../lib/crypto');
 const { setSessionCookie, clearSessionCookie, SESSION_COOKIE } = require('../lib/cookies');
 const config = require('../config');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 // Mongo-only (Atlas M10) in-memory session store when Postgres is disabled
 const isMongoOnly = !process.env.DATABASE_URL && !!process.env.MONGODB_URI;
@@ -33,7 +34,7 @@ async function createSession(res, studentId, mfaVerified = false) {
       const { MongoClient } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI);
       await client.connect();
-      await client.db(process.env.MONGODB_DB || 'voteweb').collection('sessions').insertOne({
+      await client.db(getMongoDbName()).collection('sessions').insertOne({
         sessionHash: hashToken(sessionToken),
         bindingHash: hashToken(bindingToken),
         studentId,

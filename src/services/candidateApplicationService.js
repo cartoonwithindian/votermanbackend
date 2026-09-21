@@ -8,9 +8,10 @@ const candidateService = require('./candidateService');
 const constituencyService = require('./constituencyService');
 const electionService = require('./electionService');
 const positionService = require('./positionService');
+const { normalizeYear } = require('../utils/yearNormalizer');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 function getMongoUri() { return process.env.MONGODB_URI || process.env.MONGODB_URL || null; }
-function getMongoDbName() { return process.env.MONGODB_DB || 'voteweb'; }
 
 class CandidateApplicationService {
   /**
@@ -26,9 +27,9 @@ class CandidateApplicationService {
           await client.connect();
           try {
             const col = client.db(getMongoDbName()).collection('candidate_applications');
-            const existing = await col.findOne({ enrollment_number: data.enrollmentNumber, status: { $ne: 'rejected' } });
+            const existing = await col.findOne({ student_id: studentId, status: { $ne: 'rejected' } });
             if (existing) {
-              const error = new Error('An application already exists for this enrollment number.');
+              const error = new Error('An application already exists for this student.');
               error.code = 'DUPLICATE_ENROLLMENT';
               error.status = 409;
               throw error;
@@ -112,15 +113,15 @@ class CandidateApplicationService {
       electionId,
     } = data;
 
-    // Check if enrollment number already has an application (not rejected)
+    // Check if student already has an application (not rejected)
     const existingApp = await db.query(
       `SELECT id FROM candidate_applications
-       WHERE enrollment_number = $1 AND status != 'rejected'`,
-      [enrollmentNumber]
+       WHERE student_id = $1 AND status != 'rejected'`,
+      [studentId]
     );
 
     if (existingApp.rows.length > 0) {
-      const error = new Error('An application already exists for this enrollment number.');
+      const error = new Error('An application already exists for this student.');
       error.code = 'DUPLICATE_ENROLLMENT';
       error.status = 409;
       throw error;
@@ -481,7 +482,7 @@ class CandidateApplicationService {
 
         const match = (a, b) => (a ?? '').toString().trim().toLowerCase() === (b ?? '').toString().trim().toLowerCase();
         if (!match(constituency.department, app.department) ||
-            !match(constituency.year, app.year) ||
+            !match(constituency.year, normalizeYear(app.year)) ||
             !match(constituency.section, app.section)) {
           const error = new Error(
             'Constituency does not match the applicant\u2019s department/year/section.'
@@ -510,7 +511,7 @@ class CandidateApplicationService {
             const constituency = await constituencyService.findMatching({
               electionId: el.id,
               department: app.department,
-              year: app.year,
+              year: normalizeYear(app.year),
               section: app.section || '',
               activeOnly: true,
             });
@@ -525,7 +526,7 @@ class CandidateApplicationService {
           const constituency = await constituencyService.findMatching({
             electionId,
             department: app.department,
-            year: app.year,
+            year: normalizeYear(app.year),
             section: app.section || '',
             activeOnly: true,
           });
@@ -740,7 +741,7 @@ class CandidateApplicationService {
         throw error;
       }
       if (!match(constituency.department, app.department) ||
-          !match(constituency.year, app.year) ||
+          !match(constituency.year, normalizeYear(app.year)) ||
           !match(constituency.section, app.section)) {
         const error = new Error(
           'Constituency does not match the applicant\u2019s department/year/section.'
@@ -763,7 +764,7 @@ class CandidateApplicationService {
           const constituency = await constituencyService.findMatching({
             electionId: el.id,
             department: app.department,
-            year: app.year,
+            year: normalizeYear(app.year),
             section: app.section || '',
             activeOnly: true,
           });
@@ -778,7 +779,7 @@ class CandidateApplicationService {
         const constituency = await constituencyService.findMatching({
           electionId,
           department: app.department,
-          year: app.year,
+          year: normalizeYear(app.year),
           section: app.section || '',
           activeOnly: true,
         });
@@ -909,7 +910,7 @@ class CandidateApplicationService {
                 const aid = doc._id ? String(doc._id) : doc.id;
                 const app = await this.getById(aid);
                 if (!app) { skipped.push(aid); continue; }
-                const constituency = await constituencyService.findMatching({ electionId, department: app.department, year: app.year, section: app.section || '', activeOnly: true });
+                const constituency = await constituencyService.findMatching({ electionId, department: app.department, year: normalizeYear(app.year), section: app.section || '', activeOnly: true });
                 if (!constituency) { skipped.push(aid); continue; }
                 await this.assignBallot(aid, { electionId, constituencyId: constituency.id });
                 placed.push(aid);
@@ -946,7 +947,7 @@ class CandidateApplicationService {
         const constituency = await constituencyService.findMatching({
           electionId,
           department: app.department,
-          year: app.year,
+          year: normalizeYear(app.year),
           section: app.section || '',
           activeOnly: true,
         });
@@ -1473,7 +1474,7 @@ class CandidateApplicationService {
 
     if (year && year !== 'all') {
       query += ` AND ca.year = $${paramIndex}`;
-      params.push(year);
+      params.push(normalizeYear(year));
       paramIndex++;
     }
 

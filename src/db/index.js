@@ -1,6 +1,7 @@
 const { Pool } = require('pg');
 const dbConfig = require('../config/database');
 const config = require('../config');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 // Build connection configuration
 const getPoolConfig = () => {
@@ -69,7 +70,7 @@ const healthCheck = async () => {
       const { MongoClient } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
       await client.connect();
-      await client.db(process.env.MONGODB_DB || 'voteweb').command({ ping: 1 });
+      await client.db(getMongoDbName()).command({ ping: 1 });
       await client.close();
       const duration = Date.now() - start;
       return { status: 'ok', responseTime: `${duration}ms`, timestamp: new Date().toISOString(), database: 'mongodb' };

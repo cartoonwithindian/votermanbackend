@@ -10,6 +10,8 @@
 const db = require('../db');
 const jsonStore = require('./jsonCandidateStore');
 const mongoStore = require('./mongoCandidateStore');
+const { normalizeYear } = require('../utils/yearNormalizer');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -104,8 +106,9 @@ class CandidateService {
     }
 
     if (year && year !== 'all') {
+      const normalizedYear = normalizeYear(year);
       query += ` AND ca.year = $${paramIndex}`;
-      params.push(year);
+      params.push(normalizedYear);
       paramIndex++;
     }
 
@@ -257,8 +260,9 @@ class CandidateService {
     }
 
     if (year && year !== 'all') {
+      const normalizedYear = normalizeYear(year);
       query += ` AND year = $${paramIndex}`;
-      params.push(year);
+      params.push(normalizedYear);
       paramIndex++;
     }
 
@@ -307,7 +311,7 @@ class CandidateService {
                 return filtered.slice(0, options.limit || 100);
               }
             }
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('candidates');
+            const col = client.db(getMongoDbName()).collection('candidates');
             const docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }] }).limit(options.limit || 100).skip(options.offset || 0).toArray();
             return docs.map(d => ({ id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true }));
           } finally {
@@ -347,7 +351,7 @@ class CandidateService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('candidates');
+            const col = client.db(getMongoDbName()).collection('candidates');
             let doc = null;
             try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
@@ -419,7 +423,7 @@ class CandidateService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('candidates');
+            const col = client.db(getMongoDbName()).collection('candidates');
             const doc = { position_id, positionId: position_id, name, description, image_url: image_url, imageUrl: image_url, display_order: 1, displayOrder: 1, is_active: true, isActive: true, created_at: new Date(), createdAt: new Date() };
             const res = await col.insertOne(doc);
             return { id: String(res.insertedId), position_id, name, description, image_url, display_order: 1, is_active: true };
@@ -464,7 +468,7 @@ class CandidateService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('candidates');
+            const col = client.db(getMongoDbName()).collection('candidates');
             const upd = {};
             if (data.name !== undefined) upd.name = data.name;
             if (data.description !== undefined) upd.description = data.description;

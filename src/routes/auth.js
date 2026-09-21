@@ -22,6 +22,7 @@ const { sendLoginOtp, sendPasswordResetOtp } = require('../services/brevoService
 const { recordAudit, findStudentByIdentifierOrEmail, publicUser, isLocked, incrementFailedLogin, updateStudentLogin } = require('../lib/authDb');
 const { verifyClerkSessionRequest, requireClerkMiddleware } = require('../lib/clerkVerify');
 const { incLoginAttempt, incFailedLogin } = require('../monitoring/metrics');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 // Helper for consistent error responses
 function authError(res, status, code, message) {
@@ -440,7 +441,7 @@ router.post('/admin-portal-login', loginLimiter, csrfProtection, async (req, res
       const { MongoClient } = require('mongodb');
       const mclient = new MongoClient(process.env.MONGODB_URI);
       await mclient.connect();
-      const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+      const mdb = mclient.db(getMongoDbName());
       account = await mdb.collection('students').findOne({
         $or: [
           { email: { $regex: `^${normalizedEmail}$`, $options: 'i' } },
@@ -471,7 +472,7 @@ router.post('/admin-portal-login', loginLimiter, csrfProtection, async (req, res
         const { MongoClient } = require('mongodb');
         const mclient = new MongoClient(process.env.MONGODB_URI);
         await mclient.connect();
-        const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+        const mdb = mclient.db(getMongoDbName());
         const newId = Date.now();
         const doc = {
           _id: newId,
@@ -510,7 +511,7 @@ router.post('/admin-portal-login', loginLimiter, csrfProtection, async (req, res
         const { MongoClient } = require('mongodb');
         const mclient = new MongoClient(process.env.MONGODB_URI);
         await mclient.connect();
-        const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+        const mdb = mclient.db(getMongoDbName());
         await mdb.collection('students').updateOne({ _id: account._id || account.postgresId || account.id }, { $set: { role: 'ADMIN', isActive: true } });
         await mclient.close();
         student = { id: account._id || account.postgresId || account.id, external_id: account.externalId, name: account.name, email: account.email, role: 'ADMIN', is_active: true };

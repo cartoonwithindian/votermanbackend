@@ -5,6 +5,7 @@
  * defines the handler. Returns live counts from PostgreSQL.
  */
 const db = require('../db');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 async function getStats(req, res) {
@@ -17,7 +18,7 @@ async function getStats(req, res) {
       if (uri) {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        await client.db(process.env.MONGODB_DB || 'voteweb').command({ ping: 1 }).catch(() => {});
+        await client.db(getMongoDbName()).command({ ping: 1 }).catch(() => {});
         await client.close().catch(() => {});
       }
     } catch (e) {

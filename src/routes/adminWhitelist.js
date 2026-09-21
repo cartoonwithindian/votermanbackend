@@ -9,6 +9,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { csrfProtection } = require('../middleware/csrfProtection');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 // MongoDB-only (Atlas M10) — no Postgres students table; whitelist lives in Postgres
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
@@ -26,7 +27,7 @@ router.get('/', async (req, res) => {
       const { MongoClient } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
       await client.connect();
-      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       // Attempt to serve whitelist from Mongo students collection (paginated, filtered)
       const {
         search = '',
@@ -185,7 +186,7 @@ router.get('/:id', async (req, res) => {
       const { MongoClient, ObjectId } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
       await client.connect();
-      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       const rawId = req.params.id;
       let doc = null;
       // Try ObjectId lookup, then _id string, then numeric postgresId
@@ -258,7 +259,7 @@ router.post('/', csrfProtection, async (req, res) => {
       const { MongoClient } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
       await client.connect();
-      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       const dup = await col.findOne({ $or: [{ email: normalizedEmail }, { officialEmail: normalizedEmail }, { currentLoginEmail: normalizedEmail }] });
       if (dup) {
         await client.close();
@@ -382,7 +383,7 @@ router.patch('/:id', csrfProtection, async (req, res) => {
       const { MongoClient, ObjectId } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
       await client.connect();
-      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       const rawId = req.params.id;
       let existing = null;
       try { existing = await col.findOne({ _id: new ObjectId(rawId) }); } catch {}
@@ -569,7 +570,7 @@ router.delete('/:id', csrfProtection, async (req, res) => {
       const { MongoClient, ObjectId } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
       await client.connect();
-      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       const rawId = req.params.id;
       let row = null;
       try { row = await col.findOne({ _id: new ObjectId(rawId) }); } catch {}

@@ -7,6 +7,7 @@
 const db = require('../db');
 const crypto = require('crypto');
 const { incVotesCast } = require('../monitoring/metrics');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -32,8 +33,13 @@ class VoteService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const dbName = process.env.MONGODB_DB || 'voteweb';
+            const dbName = getMongoDbName();
             const votesCol = client.db(dbName).collection('votes');
+            // Ensure unique index on (studentId, electionId, positionId) to prevent duplicate votes
+            await votesCol.createIndex(
+              { studentId: 1, electionId: 1, positionId: 1 },
+              { unique: true, background: true }
+            ).catch(() => {});
             // Minimal validation: check duplicate vote in Mongo
             const existing = await votesCol.findOne({
               studentId: parseInt(studentId),
@@ -404,7 +410,7 @@ class VoteService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('vote_receipts');
+            const col = client.db(getMongoDbName()).collection('vote_receipts');
             const doc = { vote_id: voteId, voteId, election_id: electionId, electionId, student_id: studentId, studentId, receipt_hash: receiptHash, receiptHash, nullifier, created_at: new Date(), createdAt: new Date() };
             const res = await col.insertOne(doc);
             return { receiptId: res.insertedId, receiptHash, nullifier, createdAt: doc.created_at };
@@ -459,7 +465,7 @@ class VoteService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('votes');
+            const col = client.db(getMongoDbName()).collection('votes');
             const pipeline = [
               { $match: { $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }] } },
               { $group: { _id: '$candidate_id', candidate_id: { $first: '$candidate_id' }, position_id: { $first: '$position_id' }, vote_count: { $sum: 1 } } },
@@ -510,7 +516,7 @@ class VoteService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('votes');
+            const col = client.db(getMongoDbName()).collection('votes');
             const docs = await col.aggregate([
               { $match: { $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }], $or: [{ position_id: parseInt(positionId) }, { positionId: parseInt(positionId) }] } },
               { $group: { _id: '$candidate_id', candidate_id: { $first: '$candidate_id' }, candidate_name: { $first: '$candidate_name' }, vote_count: { $sum: 1 } } },
@@ -751,7 +757,7 @@ class VoteService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('votes');
+            const col = client.db(getMongoDbName()).collection('votes');
             const filter = { $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] };
             if (positionIdList) {
               filter.$or = filter.$or.map(f => ({ ...f, position_id: { $in: positionIdList.map(Number) } }));

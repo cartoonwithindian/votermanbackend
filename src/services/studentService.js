@@ -4,6 +4,7 @@
  */
 
 const db = require('../db');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 /**
@@ -45,7 +46,7 @@ class StudentService {
       const { MongoClient } = require('mongodb');
       const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
       await client.connect();
-      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+      const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       const filter = {};
       if (options.activeOnly) filter.isActive = true;
       const rows = await col.find(filter).sort({ _id: 1 }).skip(options.offset || 0).limit(options.limit || 100).toArray();
@@ -104,7 +105,7 @@ class StudentService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+            const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
             let doc = null;
             try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ postgresId: parseInt(id) }, { id: String(id) }, { _id: String(id) }] });
@@ -169,7 +170,7 @@ class StudentService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+            const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
             const doc = await col.findOne({ $or: [{ externalId: externalId }, { external_id: externalId }] });
             if (!doc) return null;
             return sanitizeStudent({
@@ -213,7 +214,7 @@ class StudentService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+            const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
             const doc = { externalId: data.external_id, external_id: data.external_id, name: data.name, email: data.email, role: 'STUDENT', isActive: true, is_active: true, createdAt: new Date(), created_at: new Date() };
             const res = await col.insertOne(doc);
             return sanitizeStudent({ id: res.insertedId, external_id: data.external_id, name: data.name, email: data.email, role: 'STUDENT', is_active: true, voting_eligible: false });
@@ -256,7 +257,7 @@ class StudentService {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
         try {
-          const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
           const updates = {};
           if (data.name !== undefined) updates.name = data.name;
           if (data.email !== undefined) updates.email = data.email;
@@ -394,7 +395,7 @@ class StudentService {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
         try {
-          const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
           const mongoUpdates = {};
           if (updates.name) mongoUpdates.name = updates.name;
           if (updates.mobile_number !== undefined) { mongoUpdates.mobileNumber = updates.mobile_number; mongoUpdates.mobile_number = updates.mobile_number; }

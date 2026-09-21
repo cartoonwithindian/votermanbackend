@@ -4,6 +4,7 @@
  */
 
 const db = require('../db');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class AuthorizationService {
@@ -111,7 +112,7 @@ class AuthorizationService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('voter_authorizations');
+            const col = client.db(getMongoDbName()).collection('voter_authorizations');
             const doc = { student_id: data.student_id, studentId: data.student_id, election_id: data.election_id, electionId: data.election_id, is_authorized: data.is_authorized ?? true, isAuthorized: data.is_authorized ?? true, expires_at: data.expires_at || null, expiresAt: data.expires_at || null, created_at: new Date(), updated_at: new Date() };
             const res = await col.insertOne(doc);
             return { id: String(res.insertedId), student_id: doc.student_id, election_id: doc.election_id, is_authorized: doc.is_authorized, expires_at: doc.expires_at, created_at: doc.created_at, updated_at: doc.updated_at };
@@ -151,7 +152,7 @@ class AuthorizationService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('voter_authorizations');
+            const col = client.db(getMongoDbName()).collection('voter_authorizations');
             const updates = {};
             if (data.is_authorized !== undefined) { updates.is_authorized = data.is_authorized; updates.isAuthorized = data.is_authorized; }
             if (data.expires_at !== undefined) { updates.expires_at = data.expires_at; updates.expiresAt = data.expires_at; }
@@ -223,7 +224,7 @@ class AuthorizationService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('voter_authorizations');
+            const col = client.db(getMongoDbName()).collection('voter_authorizations');
             let res = null;
             try { if (ObjectId.isValid(String(id))) res = await col.findOneAndDelete({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!res || !res.value) res = await col.findOneAndDelete({ $or: [{ id: String(id) }, { _id: String(id) }] });
@@ -435,7 +436,7 @@ class AuthorizationService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const dbName = process.env.MONGODB_DB || 'voteweb';
+            const dbName = getMongoDbName();
             // Check election exists in Mongo
             const eCol = client.db(dbName).collection('elections');
             let election = null;

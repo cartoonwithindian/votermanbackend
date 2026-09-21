@@ -9,6 +9,7 @@
  */
 
 const { MongoClient } = require('mongodb');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 let client = null;
 let clientPromise = null;
@@ -18,7 +19,7 @@ function getMongoUri() {
 }
 
 function getDbName() {
-  return process.env.MONGODB_DB || 'voteweb';
+  return getMongoDbName();
 }
 
 function getCollectionName() {

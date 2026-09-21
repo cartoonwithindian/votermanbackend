@@ -9,6 +9,7 @@ const router = express.Router();
 const positionController = require('../controllers/positionController');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { csrfProtection } = require('../middleware/csrfProtection');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -23,7 +24,7 @@ router.get('/', requireAdmin, async (req, res, next) => {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
         try {
-          const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_POSITIONS_COLLECTION || 'positions');
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_POSITIONS_COLLECTION || 'positions');
           const docs = await col.find({}).sort({ display_order: 1 }).limit(200).toArray();
           await client.close().catch(() => {});
           if (docs.length) {

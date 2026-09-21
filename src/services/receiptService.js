@@ -5,6 +5,7 @@
 
 const crypto = require('crypto');
 const db = require('../db');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class ReceiptService {
@@ -59,7 +60,7 @@ class ReceiptService {
             const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
             await client.connect();
             try {
-              const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('vote_receipts');
+              const col = client.db(getMongoDbName()).collection('vote_receipts');
               let doc = null;
               try { if (ObjectId.isValid(String(receiptId))) doc = await col.findOne({ _id: new ObjectId(String(receiptId)) }); } catch (_) {}
               if (!doc) doc = await col.findOne({ $or: [{ _id: String(receiptId) }, { id: String(receiptId) }] });
@@ -84,7 +85,7 @@ class ReceiptService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('vote_receipts');
+            const col = client.db(getMongoDbName()).collection('vote_receipts');
             let doc = null;
             try { if (ObjectId.isValid(String(receiptId))) doc = await col.findOne({ _id: new ObjectId(String(receiptId)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ id: String(receiptId) }, { _id: String(receiptId) }] });
@@ -93,7 +94,7 @@ class ReceiptService {
             let electionName = doc.election_name ?? doc.electionName ?? 'Election';
             let electionStatus = doc.election_status ?? doc.electionStatus ?? 'OPEN';
             try {
-              const eCol = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+              const eCol = client.db(getMongoDbName()).collection('elections');
               const eId = doc.election_id ?? doc.electionId;
               if (eId) {
                 let eDoc = null;
@@ -215,7 +216,7 @@ class ReceiptService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const dbName = process.env.MONGODB_DB || 'voteweb';
+            const dbName = getMongoDbName();
             const vrCol = client.db(dbName).collection('vote_receipts');
             const doc = await vrCol.findOne({ $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] });
             if (!doc) return null;

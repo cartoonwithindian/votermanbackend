@@ -4,6 +4,7 @@
  */
 
 const db = require('../db');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class SupportService {
@@ -27,7 +28,7 @@ class SupportService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('support_requests');
+            const col = client.db(getMongoDbName()).collection('support_requests');
             const doc = { student_id: studentId, studentId, election_id: electionId || null, electionId: electionId || null, category, subject, description, status: 'open', created_at: new Date(), createdAt: new Date(), updated_at: new Date(), updatedAt: new Date() };
             const res = await col.insertOne(doc);
             return { id: String(res.insertedId), student_id: studentId, election_id: electionId || null, category, subject, description, status: 'open', created_at: doc.created_at, updated_at: doc.updated_at };
@@ -71,7 +72,7 @@ class SupportService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('support_requests');
+            const col = client.db(getMongoDbName()).collection('support_requests');
             const filter = {};
             if (studentId) filter.$or = [{ student_id: studentId }, { studentId }, { student_id: String(studentId) }];
             if (status) filter.status = status;
@@ -149,7 +150,7 @@ class SupportService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('support_requests');
+            const col = client.db(getMongoDbName()).collection('support_requests');
             let doc = null;
             try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
@@ -191,7 +192,7 @@ class SupportService {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
           try {
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('support_requests');
+            const col = client.db(getMongoDbName()).collection('support_requests');
             const updates = { updated_at: new Date(), updatedAt: new Date() };
             if (status !== undefined) {
               if (!this.VALID_STATUSES.includes(status)) throw new Error(`Invalid status. Must be one of: ${this.VALID_STATUSES.join(', ')}`);

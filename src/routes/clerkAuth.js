@@ -23,6 +23,7 @@ const { hashPassword } = require('../lib/password');
 const { createSession } = require('../services/sessionService');
 const { recordAudit, publicUser } = require('../lib/authDb');
 const { requireClerkMiddleware, fetchClerkPrimaryEmail, logVerificationResult } = require('../lib/clerkVerify');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 function authError(res, status, code, message) {
@@ -73,7 +74,7 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
       const { MongoClient } = require('mongodb');
       const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
       await mclient.connect();
-      const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+      const mdb = mclient.db(getMongoDbName());
       account = await mdb.collection('students').findOne({
         isActive: true,
         $or: [
@@ -121,7 +122,7 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
         const { MongoClient } = require('mongodb');
         const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
         await mclient.connect();
-        const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+        const mdb = mclient.db(getMongoDbName());
         whitelistCheck = await mdb.collection('students').findOne({
           $or: [
             { email: { $regex: `^${email}$`, $options: 'i' } },
@@ -162,7 +163,7 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
           const { MongoClient } = require('mongodb');
           const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
           await mclient.connect();
-          const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+          const mdb = mclient.db(getMongoDbName());
           pending = await mdb.collection('students').findOne({ _id: whitelistCheck.id }) || await mdb.collection('students').findOne({ postgresId: whitelistCheck.id });
           if (pending) {
             pending = { id: pending._id || pending.postgresId, external_id: pending.externalId, name: pending.name, email: pending.email, role: pending.role, is_active: pending.isActive };
@@ -207,7 +208,7 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
         const { MongoClient } = require('mongodb');
         const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
         await mclient.connect();
-        const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+        const mdb = mclient.db(getMongoDbName());
         const newId = Date.now();
         const doc = {
           _id: newId,
@@ -243,7 +244,7 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
         const { MongoClient } = require('mongodb');
         const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
         await mclient.connect();
-        const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+        const mdb = mclient.db(getMongoDbName());
         await mdb.collection('students').updateOne({ _id: account.id }, { $set: { role: 'ADMIN' } });
         await mclient.close();
         account.role = 'ADMIN';
@@ -264,7 +265,7 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
           const { MongoClient } = require('mongodb');
           const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
           await mclient.connect();
-          const mdb = mclient.db(process.env.MONGODB_DB || 'voteweb');
+          const mdb = mclient.db(getMongoDbName());
           await mdb.collection('students').updateOne({ _id: account.id }, { $set: { role: 'CAD' } });
           await mclient.close();
           account.role = 'CAD';

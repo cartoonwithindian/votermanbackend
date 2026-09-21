@@ -17,6 +17,7 @@ const router = express.Router();
 
 const db = require('../db');
 const { requireStaff } = require('../middleware/requireRole');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 router.use(requireStaff);
@@ -32,7 +33,7 @@ router.get('/overview', async (req, res) => {
       if (uri) {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        await client.db(process.env.MONGODB_DB || 'voteweb').command({ ping: 1 }).catch(() => {});
+        await client.db(getMongoDbName()).command({ ping: 1 }).catch(() => {});
         await client.close().catch(() => {});
       }
     } catch (e) {
@@ -115,7 +116,7 @@ router.get('/elections', async (req, res) => {
       if (!uri) return res.json({ data: { elections: [] } });
       const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
       await client.connect();
-      const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+      const col = client.db(getMongoDbName()).collection('elections');
       const docs = await col.find({}).sort({ _id: 1 }).limit(100).toArray();
       await client.close().catch(() => {});
       if (!docs.length) return res.json({ data: { elections: [] } });
@@ -173,7 +174,7 @@ router.get('/elections/:id/results', async (req, res) => {
           try {
             const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
             await client.connect();
-            const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+            const col = client.db(getMongoDbName()).collection('elections');
             let doc = null;
             try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ postgresId: id }, { id }] });
@@ -258,7 +259,7 @@ router.get('/voters', async (req, res) => {
       if (uri) {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        await client.db(process.env.MONGODB_DB || 'voteweb').command({ ping: 1 }).catch(() => {});
+        await client.db(getMongoDbName()).command({ ping: 1 }).catch(() => {});
         await client.close().catch(() => {});
       }
     } catch (e) {

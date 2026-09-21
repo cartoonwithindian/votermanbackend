@@ -5,6 +5,7 @@
 
 const studentService = require('../services/studentService');
 const { recordAudit } = require('../lib/authDb');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 // Derive department / year-or-semester / section from a student_id like:
 //   "BBA-A1-3SEM-030" -> { BBA, A1, 3 Sem }
@@ -456,7 +457,7 @@ class StudentController {
         if (uri) {
           const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
           await client.connect();
-          const col = client.db(process.env.MONGODB_DB || 'voteweb').collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
           const filter = {};
           if (req.body.role && typeof req.body.role === 'string') filter.role = req.body.role;
           if (typeof req.body.is_active === 'boolean') filter.isActive = req.body.is_active;

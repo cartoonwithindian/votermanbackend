@@ -4,6 +4,7 @@
  */
 
 const db = require('../db');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 // Valid status transitions
@@ -35,7 +36,7 @@ class ElectionService {
         if (!uri) return [];
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+        const col = client.db(getMongoDbName()).collection('elections');
         const filter = {};
         if (options.status) filter.status = options.status;
         else if (options.excludeDraft) filter.status = { $ne: 'DRAFT' };
@@ -97,7 +98,7 @@ class ElectionService {
         if (!uri) return null;
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+        const col = client.db(getMongoDbName()).collection('elections');
         // Try _id and numeric postgresId/id
         const { ObjectId } = require('mongodb');
         let doc = null;
@@ -156,7 +157,7 @@ class ElectionService {
         }
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+        const col = client.db(getMongoDbName()).collection('elections');
         const doc = { name: data.name, description: data.description || null, start_time: data.start_time || null, end_time: data.end_time || null, status: 'DRAFT', created_at: new Date(), updated_at: new Date() };
         const res = await col.insertOne(doc);
         await client.close();
@@ -210,7 +211,7 @@ class ElectionService {
         if (!uri) return { ...election, ...data, updated_at: new Date().toISOString() };
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+        const col = client.db(getMongoDbName()).collection('elections');
         const updates = {};
         for (const f of ['name', 'description', 'start_time', 'end_time']) {
           if (data[f] !== undefined) updates[f] = data[f];
@@ -320,7 +321,7 @@ class ElectionService {
         if (!uri) return { election: { ...election, status: newStatus }, previousStatus };
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+        const col = client.db(getMongoDbName()).collection('elections');
         const updates = { status: newStatus, updated_at: new Date(), updatedAt: new Date() };
         if (newStatus === 'PUBLISHED') { updates.results_published_at = new Date(); updates.resultsPublishedAt = new Date(); }
         let filter = {};
@@ -683,7 +684,7 @@ class ElectionService {
         if (!uri) return { election: { ...election, status: 'PUBLISHED', results_published_at: new Date().toISOString() } };
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+        const col = client.db(getMongoDbName()).collection('elections');
         const updates = { status: 'PUBLISHED', results_published_at: new Date(), resultsPublishedAt: new Date(), results_published_by: adminUserId, updated_at: new Date() };
         let filter = {};
         try { if (ObjectId.isValid(String(id))) filter = { _id: new ObjectId(String(id)) }; } catch (_) {}

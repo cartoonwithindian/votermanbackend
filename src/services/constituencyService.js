@@ -9,15 +9,15 @@
  */
 
 const db = require('../db');
+const { getMongoDbName } = require('../utils/mongoDbName');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 function getMongoUri() {
   return process.env.MONGODB_URI || process.env.MONGODB_URL || null;
 }
-function getMongoDbName() {
-  return process.env.MONGODB_DB || 'voteweb';
-}
+
+const COLLECTION_NAME = process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies';
 
 // Each class constituency exposes two lock-step Class Representative seats —
 // one Boy CR and one Girl CR — so a class votes for one boy and one girl rep.
@@ -47,7 +47,7 @@ class ConstituencyService {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
         try {
-          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies');
+          const col = client.db(getMongoDbName()).collection(COLLECTION_NAME);
           const filter = {};
           // Try both numeric and string election_id variants
           filter.$or = [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }, { election_id: String(electionId) }, { electionId: String(electionId) }];
@@ -104,7 +104,7 @@ class ConstituencyService {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
         try {
-          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies');
+          const col = client.db(getMongoDbName()).collection(COLLECTION_NAME);
           let doc = null;
           try {
             if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) });
@@ -153,7 +153,7 @@ class ConstituencyService {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
         try {
-          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies');
+          const col = client.db(getMongoDbName()).collection(COLLECTION_NAME);
           // Fetch candidates for election then filter case-insensitively in JS
           const docs = await col.find({ $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }, { election_id: String(electionId) }, { electionId: String(electionId) }] }).toArray();
           const match = (a, b) => (a ?? '').toString().trim().toLowerCase() === (b ?? '').toString().trim().toLowerCase();
@@ -360,7 +360,7 @@ class ConstituencyService {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
         try {
-          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies');
+          const col = client.db(getMongoDbName()).collection(COLLECTION_NAME);
           const updates = {};
           if (data.name !== undefined) updates.name = String(data.name).trim();
           if (data.is_active !== undefined) { updates.is_active = Boolean(data.is_active); updates.isActive = Boolean(data.is_active); }

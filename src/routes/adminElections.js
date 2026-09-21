@@ -10,6 +10,7 @@ const db = require('../db');
 const electionController = require('../controllers/electionController');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { csrfProtection } = require('../middleware/csrfProtection');
+const { getMongoDbName } = require('../utils/mongoDbName');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 // GET /api/v1/admin/elections - List all elections (admin only)
@@ -44,7 +45,7 @@ router.get('/:id/turnout', requireAdmin, async (req, res) => {
       if (uri) {
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
         await client.connect();
-        const col = client.db(process.env.MONGODB_DB || 'voteweb').collection('elections');
+        const col = client.db(getMongoDbName()).collection('elections');
         const eid = parseInt(req.params.id, 10);
         let doc = null;
         try { if (ObjectId.isValid(String(eid))) doc = await col.findOne({ _id: new ObjectId(String(eid)) }); } catch (_) {}
