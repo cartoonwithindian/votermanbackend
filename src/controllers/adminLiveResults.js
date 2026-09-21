@@ -10,21 +10,66 @@ const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || p
 
 async function getLive(req, res) {
   if (isMongoOnly) {
-    // Atlas M10 — return empty live stats (no Postgres)
-    return res.json({
-      data: {
-        stats: {
-          students: { total: 0, active: 0, voting_eligible: 0 },
-          elections: { total: 0, open: 0, published: 0 },
-          candidates: { total: 0 },
-          votes: { total: 0, unique_voters: 0 },
-          accessRequests: { total: 0, pending: 0 },
-          pendingCandidateApplications: 0,
+    try {
+      const { MongoClient } = require('mongodb');
+      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
+      await client.connect();
+      const dbMongo = client.db(process.env.MONGODB_DB || 'voteweb');
+      const [studentsTotal, studentsActive, electionsTotal, electionsOpen, candidatesTotal, votesTotal, pendingApps] = await Promise.all([
+        dbMongo.collection('students').countDocuments({ role: 'STUDENT' }),
+        dbMongo.collection('students').countDocuments({ role: 'STUDENT', isActive: true }),
+        dbMongo.collection('elections').countDocuments(),
+        dbMongo.collection('elections').countDocuments({ status: 'OPEN' }),
+        dbMongo.collection('candidates').countDocuments({ isActive: true }),
+        dbMongo.collection('votes').countDocuments(),
+        dbMongo.collection('candidate_applications').countDocuments({ status: 'under_review' }),
+      ]);
+      const leaderboard = await dbMongo.collection('candidates').aggregate([
+        { $match: { isActive: true } },
+        { $lookup: { from: 'positions', localField: 'positionId', foreignField: '_id', as: 'pos' } },
+        { $unwind: { path: '$pos', preserveNullAndEmptyArrays: true } },
+        { $lookup: { from: 'constituencies', localField: 'pos.constituencyId', foreignField: '_id', as: 'ct' } },
+        { $unwind: { path: '$ct', preserveNullAndEmptyArrays: true } },
+        { $lookup: { from: 'elections', localField: 'ct.electionId', foreignField: '_id', as: 'e' } },
+        { $unwind: { path: '$e', preserveNullAndEmptyArrays: true } },
+        { $lookup: { from: 'votes', localField: '_id', foreignField: 'candidateId', as: 'vs' } },
+        { $project: { candidate_id: '$_id', candidate_name: '$name', position_name: '$pos.name', election_id: '$e._id', election_name: '$e.name', scope_name: '$ct.name', votes: { $size: '$vs' } } },
+        { $sort: { votes: -1, candidate_name: 1 } },
+        { $limit: 10 },
+      ]).toArray();
+      await client.close();
+      return res.json({
+        data: {
+          stats: {
+            students: { total: studentsTotal, active: studentsActive, voting_eligible: studentsActive },
+            elections: { total: electionsTotal, open: electionsOpen, published: 0 },
+            candidates: { total: candidatesTotal },
+            votes: { total: votesTotal, unique_voters: 0 },
+            accessRequests: { total: 0, pending: 0 },
+            pendingCandidateApplications: pendingApps,
+          },
+          leaderboard,
+          generatedAt: new Date().toISOString(),
         },
-        leaderboard: [],
-        generatedAt: new Date().toISOString(),
-      },
-    });
+      });
+    } catch (e) {
+      console.error('admin live mongo failed:', e.message);
+      // Fallback to empty if Atlas not reachable
+      return res.json({
+        data: {
+          stats: {
+            students: { total: 0, active: 0, voting_eligible: 0 },
+            elections: { total: 0, open: 0, published: 0 },
+            candidates: { total: 0 },
+            votes: { total: 0, unique_voters: 0 },
+            accessRequests: { total: 0, pending: 0 },
+            pendingCandidateApplications: 0,
+          },
+          leaderboard: [],
+          generatedAt: new Date().toISOString(),
+        },
+      });
+    }
   }
   try {
     const [
