@@ -2,9 +2,13 @@ const { Redis } = require('@upstash/redis');
 
 const UPSTASH_REDIS_REST_URL = process.env.UPSTASH_REDIS_REST_URL || '';
 const UPSTASH_REDIS_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
-const REQUEST_TIMEOUT_MS = 1500;
+const REQUEST_TIMEOUT_MS = 500;
+const FAILURE_THRESHOLD = 2;
+const COOLDOWN_MS = 30000;
 
 let client = null;
+let consecutiveFailures = 0;
+let cooldownUntil = 0;
 
 if (UPSTASH_REDIS_REST_URL && UPSTASH_REDIS_REST_TOKEN) {
   try {
@@ -20,24 +24,42 @@ if (UPSTASH_REDIS_REST_URL && UPSTASH_REDIS_REST_TOKEN) {
   }
 }
 
+function inCooldown() {
+  return Date.now() < cooldownUntil;
+}
+
+function markSuccess() {
+  consecutiveFailures = 0;
+}
+
+function markFailure() {
+  consecutiveFailures++;
+  if (consecutiveFailures >= FAILURE_THRESHOLD) {
+    cooldownUntil = Date.now() + COOLDOWN_MS;
+    console.warn(`[redisCache] ${consecutiveFailures} consecutive failures — pausing cache for ${COOLDOWN_MS / 1000}s`);
+  }
+}
+
 function isEnabled() {
-  return !!client;
+  return !!client && !inCooldown();
 }
 
 async function getKey(key) {
-  if (!client) return null;
+  if (!client || inCooldown()) return null;
   try {
     const raw = await client.get(key);
-    if (raw == null) return null;
+    if (raw == null) { markSuccess(); return null; }
+    markSuccess();
     return JSON.parse(raw);
   } catch (e) {
+    markFailure();
     console.warn('[redisCache] getKey failed:', e.message);
     return null;
   }
 }
 
 async function setKey(key, value, ttlSeconds) {
-  if (!client) return true;
+  if (!client || inCooldown()) return true;
   try {
     const raw = JSON.stringify(value);
     if (ttlSeconds != null && ttlSeconds > 0) {
@@ -45,15 +67,17 @@ async function setKey(key, value, ttlSeconds) {
     } else {
       await client.set(key, raw);
     }
+    markSuccess();
     return true;
   } catch (e) {
+    markFailure();
     console.warn('[redisCache] setKey failed:', e.message);
     return false;
   }
 }
 
 async function deleteKeysWithPrefix(prefix) {
-  if (!client) return 0;
+  if (!client || inCooldown()) return 0;
   let deleted = 0;
   try {
     let cursor = 0;
@@ -67,8 +91,10 @@ async function deleteKeysWithPrefix(prefix) {
         } catch (_) {}
       }
     } while (cursor !== 0);
+    markSuccess();
     return deleted;
   } catch (e) {
+    markFailure();
     console.warn('[redisCache] deleteKeysWithPrefix failed:', e.message);
     return 0;
   }
