@@ -315,20 +315,11 @@ try {
                 electionById.set(String(e._id), e);
                 if (e.postgresId != null) electionById.set(String(e.postgresId), e);
               }
-              const openElectionIds = new Set();
-              for (const e of electionDocs) {
-                if (['OPEN', 'DRAFT', 'SCHEDULED'].includes(String(e.status || '').toUpperCase())) {
-                  openElectionIds.add(String(e._id));
-                  if (e.postgresId != null) openElectionIds.add(String(e.postgresId));
-                }
-              }
               ballotDocs = ballotDocs.filter(doc => {
                 const pos = positionById.get(String(doc.position_id ?? doc.positionId ?? ''));
                 if (!pos) return false;
                 const ct = constituentById.get(String(pos.constituency_id ?? pos.constituencyId ?? ''));
-                if (!ct) return false;
-                const eid = ct.election_id ?? ct.electionId;
-                return openElectionIds.has(String(eid));
+                return !!ct;
               });
               docs = ballotDocs.map(doc => {
                   const pos = positionById.get(String(doc.position_id ?? doc.positionId ?? ''));

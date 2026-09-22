@@ -56,6 +56,11 @@ async function main() {
   console.log(`Snapshot created: ${snapshot.created_at}`);
   console.log(`Schema version:   migration #${snapshot.max_migration}`);
   console.log(`Rows:             ${totalRows} across ${Object.keys(counts).length} tables`);
+  if (snapshot.mongo) {
+    const mongoCounts = snapshot.mongo.row_counts || {};
+    const mongoRows = Object.values(mongoCounts).reduce((a, b) => a + b, 0);
+    console.log(`Mongo docs:       ${mongoRows} across ${Object.keys(mongoCounts).length} collections`);
+  }
   console.log();
 
   const skipConfirm = process.argv.includes('--yes') || !process.stdin.isTTY;
@@ -64,7 +69,7 @@ async function main() {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const answer = await new Promise((resolve) => {
       rl.question(
-        `This will TRUNCATE the target tables and re-insert ${totalRows} rows. Continue? (yes/no) `,
+        `This will TRUNCATE the target tables ${snapshot.mongo ? 'and REPLACE the Mongo collections ' : ''}and re-insert ${totalRows} rows. Continue? (yes/no) `,
         resolve
       );
     });
@@ -75,12 +80,27 @@ async function main() {
     }
   }
 
-  const restored = await backupService.restoreSnapshot(snapshot);
-  const totalRestored = Object.values(restored).reduce((a, b) => a + b, 0);
+  let mongoDb = null;
+  try {
+    const mongoClient = require('../src/db/mongoClient');
+    mongoDb = await mongoClient.getDb();
+  } catch (e) {
+    console.warn(`No MongoDB connection (${e.message}); Mongo collections will be skipped.`);
+  }
+  const restored = await backupService.restoreSnapshot(snapshot, null, mongoDb);
+  const pgRestored = { ...restored };
+  delete pgRestored.mongo;
+  const totalRestored = Object.values(pgRestored).reduce((a, b) => a + b, 0);
   console.log();
-  console.log(`Restore complete: ${totalRestored} rows across ${Object.keys(restored).length} tables.`);
-  for (const [table, n] of Object.entries(restored)) {
+  console.log(`Restore complete: ${totalRestored} rows across ${Object.keys(pgRestored).length} tables.`);
+  for (const [table, n] of Object.entries(pgRestored)) {
     console.log(`  ${table}: ${n}`);
+  }
+  if (restored.mongo) {
+    console.log(`Mongo restore:    ${Object.values(restored.mongo).reduce((a, b) => a + b, 0)} docs across ${Object.keys(restored.mongo).length} collections.`);
+    for (const [coll, n] of Object.entries(restored.mongo)) {
+      console.log(`  ${coll}: ${n}`);
+    }
   }
   process.exit(0);
 }

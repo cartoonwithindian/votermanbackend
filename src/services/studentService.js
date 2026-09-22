@@ -191,28 +191,29 @@ class StudentService {
    * Create a new student
    */
   async create(data) {
+    const extId = data.external_id || `ADM-${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 1000)}`;
     if (isMongoOnly) {
       try {
         const client = await getSharedClient();
         if (client) {
           const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
-          const doc = { externalId: data.external_id, external_id: data.external_id, name: data.name, email: data.email, role: 'STUDENT', isActive: true, is_active: true, createdAt: new Date(), created_at: new Date() };
+          const doc = { externalId: extId, external_id: extId, name: data.name, email: data.email, role: 'STUDENT', department: data.department || null, year: data.year_or_semester || null, year_or_semester: data.year_or_semester || null, section: data.section || null, isActive: true, is_active: true, createdAt: new Date(), created_at: new Date() };
           const res = await col.insertOne(doc);
-          return sanitizeStudent({ id: res.insertedId, external_id: data.external_id, name: data.name, email: data.email, role: 'STUDENT', is_active: true, voting_eligible: false });
+          return sanitizeStudent({ id: res.insertedId, external_id: extId, name: data.name, email: data.email, role: 'STUDENT', department: data.department || null, year_or_semester: data.year_or_semester || null, section: data.section || null, is_active: true, voting_eligible: false });
         }
       } catch (e) {
         console.warn('studentService.create mongo fallback failed:', e.message);
       }
       // Fallback mock to avoid 500
-      return sanitizeStudent({ id: `mock-${Date.now()}`, external_id: data.external_id, name: data.name, email: data.email, role: 'STUDENT', is_active: true, voting_eligible: false });
+      return sanitizeStudent({ id: `mock-${Date.now()}`, external_id: extId, name: data.name, email: data.email, role: 'STUDENT', department: data.department || null, year_or_semester: data.year_or_semester || null, section: data.section || null, is_active: true, voting_eligible: false });
     }
-    const { external_id, name, email } = data;
+    const { name, email, department, year_or_semester, section } = data;
 
     const result = await db.query(
-      `INSERT INTO students (external_id, name, email)
-       VALUES ($1, $2, $3)
+      `INSERT INTO students (external_id, name, email, department, year_or_semester, section)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [external_id, name, email]
+      [extId, name, email, department, year_or_semester, section]
     );
 
     return sanitizeStudent(result.rows[0]);
@@ -242,6 +243,10 @@ class StudentService {
         if (data.year_or_semester !== undefined) { updates.year = data.year_or_semester; updates.year_or_semester = data.year_or_semester; }
         if (data.section !== undefined) updates.section = data.section;
         if (data.profile_image_url !== undefined) { updates.profileImageUrl = data.profile_image_url; updates.profile_image_url = data.profile_image_url; }
+        if (data.mobile_number !== undefined) { updates.mobileNumber = data.mobile_number; updates.mobile_number = data.mobile_number; }
+        if (data.enrollment_number !== undefined) { updates.enrollmentNumber = data.enrollment_number; updates.enrollment_number = data.enrollment_number; }
+        if (data.student_id !== undefined) { updates.studentId = data.student_id; updates.student_id = data.student_id; }
+        if (data.official_email !== undefined) { updates.officialEmail = data.official_email; updates.official_email = data.official_email; }
         updates.updatedAt = new Date(); updates.updated_at = new Date();
         let res = null;
         try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
@@ -249,7 +254,7 @@ class StudentService {
         if (!res || !res.value) res = await col.findOneAndUpdate({ id: String(id) }, { $set: updates }, { returnDocument: 'after' });
         if (res && res.value) {
           const d = res.value;
-          return sanitizeStudent({ id: d._id || d.postgresId, name: d.name, email: d.email, role: d.role, department: d.department, year_or_semester: d.year || d.year_or_semester, section: d.section, is_active: d.isActive ?? d.is_active, voting_eligible: d.votingEligible ?? d.voting_eligible, profile_image_url: d.profileImageUrl || d.profile_image_url });
+          return sanitizeStudent({ id: d._id || d.postgresId, name: d.name, email: d.email, role: d.role, department: d.department, year_or_semester: d.year || d.year_or_semester, section: d.section, is_active: d.isActive ?? d.is_active, voting_eligible: d.votingEligible ?? d.voting_eligible, profile_image_url: d.profileImageUrl || d.profile_image_url, mobile_number: d.mobileNumber || d.mobile_number || null, enrollment_number: d.enrollmentNumber || d.enrollment_number || null, student_id: d.studentId || d.student_id || null, official_email: d.officialEmail || d.official_email || null });
         }
         return sanitizeStudent({ ...existing, ...data });
       } catch (e) {
@@ -259,7 +264,7 @@ class StudentService {
         return sanitizeStudent({ ...existing, ...data });
       }
     }
-    const { name, email, voting_eligible, role, department, year_or_semester, section, profile_image_url } = data;
+    const { name, email, voting_eligible, role, department, year_or_semester, section, profile_image_url, mobile_number, enrollment_number, student_id, official_email } = data;
 
     // Build SET clauses dynamically so partial updates only touch given fields
     const sets = [];
@@ -298,6 +303,22 @@ class StudentService {
       sets.push(`profile_image_url = $${idx++}`);
       values.push(profile_image_url ? String(profile_image_url).trim() : null);
     }
+    if (mobile_number !== undefined) {
+      sets.push(`mobile_number = $${idx++}`);
+      values.push(mobile_number ? String(mobile_number).trim() : null);
+    }
+    if (enrollment_number !== undefined) {
+      sets.push(`enrollment_number = $${idx++}`);
+      values.push(enrollment_number ? String(enrollment_number).trim() : null);
+    }
+    if (student_id !== undefined) {
+      sets.push(`student_id = $${idx++}`);
+      values.push(student_id ? String(student_id).trim() : null);
+    }
+    if (official_email !== undefined) {
+      sets.push(`official_email = $${idx++}`);
+      values.push(official_email ? String(official_email).trim() : null);
+    }
 
     if (sets.length === 0) {
       const existing = await db.query('SELECT * FROM students WHERE id = $1', [id]);
@@ -331,6 +352,84 @@ class StudentService {
       [isActive, id]
     );
 
+    return sanitizeStudent(result.rows[0]) || null;
+  }
+
+  /**
+   * Permanently remove a student (PG + Mongo).
+   * In PG, students who already voted are protected (votes FK is RESTRICT);
+   * the controller surfaces a friendly 409 instead.
+   */
+  async remove(id) {
+    if (isMongoOnly) {
+      const existing = await this.findById(id);
+      if (!existing) return null;
+      try {
+        const client = await getSharedClient();
+        if (!client) return existing;
+        const { ObjectId } = require('mongodb');
+        const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+        const matcher = (q) => col.findOneAndDelete(q, { returnDocument: 'before' });
+        let found = null;
+        try { if (ObjectId.isValid(String(id))) { const r = await matcher({ _id: new ObjectId(String(id)) }); found = r?.value || null; } } catch (_) {}
+        if (!found) { const r = await matcher({ postgresId: parseInt(id) }); found = r?.value || null; }
+        if (!found) { const r = await matcher({ id: String(id) }); found = r?.value || null; }
+        if (!found) { const rows = await col.find({}).limit(200).toArray(); const doc = rows.find(r => String(r._id) === String(id) || String(r.postgresId) === String(id)); if (doc) { const r = await col.findOneAndDelete({ _id: doc._id }, { returnDocument: 'before' }); found = r?.value || null; } }
+        try {
+          const dbName = getMongoDbName();
+          const stuId = String(existing.id);
+          const apps = client.db(dbName).collection('candidate_applications');
+          const cands = client.db(dbName).collection('candidates');
+          await apps.deleteMany({ $or: [{ student_id: stuId }, { studentId: stuId }, { student_id: parseInt(id) }] });
+          await cands.deleteMany({ $or: [{ student_id: stuId }, { studentId: stuId }] }).catch(() => {});
+        } catch (e) {
+          console.warn('[studentService] remove mongo cand cleanup:', e.message);
+        }
+        return sanitizeStudent({ ...existing, email: found?.email ?? existing.email });
+      } catch (e) {
+        console.warn('studentService.remove mongo failed:', e.message);
+        return existing;
+      }
+    }
+
+    // PG
+    const existing = await db.query('SELECT * FROM students WHERE id = $1', [id]);
+    if (!existing.rows[0]) return null;
+    const student = existing.rows[0];
+
+    // Guard: students who already voted cannot be hard-deleted.
+    const votes = await db.query('SELECT 1 FROM votes WHERE student_id = $1 LIMIT 1', [id]);
+    if (votes.rows.length > 0) {
+      const err = new Error('This student has already voted, so they cannot be permanently deleted.');
+      err.code = 'STUDENT_HAS_VOTES';
+      throw err;
+    }
+
+    // Best-effort: remove ballot `candidates` rows for this student's approved
+    // applications (mirrored by position + name). Votes on those candidates are
+    // RESTRICT — skip silently rather than blocking the student removal.
+    try {
+      const apps = await db.query(
+        `SELECT id, position_id, full_name
+         FROM candidate_applications
+         WHERE student_id = $1 AND status = 'approved'`,
+        [id]
+      );
+      for (const appRow of apps.rows) {
+        if (!appRow.position_id || !appRow.full_name) continue;
+        await db.query(
+          `DELETE FROM candidates
+           WHERE position_id = $1 AND LOWER(name) = LOWER($2)`,
+          [appRow.position_id, appRow.full_name]
+        ).catch(() => {});
+      }
+    } catch (e) {
+      console.warn('[studentService] remove ballot cleanup:', e.message);
+    }
+
+    // Delete the student (cascades candidate_applications, sessions,
+    // notifications, support requests, receipts, etc. via FK).
+    const result = await db.query('DELETE FROM students WHERE id = $1 RETURNING *', [id]);
     return sanitizeStudent(result.rows[0]) || null;
   }
 

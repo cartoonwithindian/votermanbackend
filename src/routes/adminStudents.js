@@ -56,4 +56,7 @@ router.patch('/:id', requireAdmin, csrfProtection, studentController.update.bind
 // PATCH /api/v1/admin/students/:id/status - Update student status (admin only)
 router.patch('/:id/status', requireAdmin, csrfProtection, studentController.updateStatus.bind(studentController));
 
+// DELETE /api/v1/admin/students/:id - Permanently remove a student (admin only)
+router.delete('/:id', requireAdmin, csrfProtection, studentController.remove.bind(studentController));
+
 module.exports = router;

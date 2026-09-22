@@ -9,6 +9,13 @@ const router = express.Router();
 const constituencyController = require('../controllers/constituencyController');
 const constituencyService = require('../services/constituencyService');
 const { csrfProtection } = require('../middleware/csrfProtection');
+const { ObjectId } = require('mongodb');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
+const resolveElectionId = (raw) => {
+  if (isMongoOnly && raw && ObjectId.isValid(String(raw))) return String(raw);
+  return parseInt(raw, 10);
+};
 
 // POST /api/v1/admin/constituencies - Create a constituency (+ its CR position)
 router.post('/', csrfProtection, constituencyController.create.bind(constituencyController));
@@ -17,14 +24,15 @@ router.post('/', csrfProtection, constituencyController.create.bind(constituency
 router.post('/bulk', csrfProtection, async (req, res) => {
   try {
     const { election_id, classes } = req.body;
-    if (!election_id || isNaN(parseInt(election_id))) {
+    if (!election_id || (!isMongoOnly && isNaN(parseInt(election_id)))) {
       return res.status(400).json({ error: 'Bad Request', message: 'election_id is required.' });
     }
     if (!Array.isArray(classes) || classes.length === 0) {
       return res.status(400).json({ error: 'Bad Request', message: 'classes array is required and must not be empty.' });
     }
     const electionService = require('../services/electionService');
-    const election = await electionService.findById(parseInt(election_id));
+    const resolvedElectionId = resolveElectionId(election_id);
+    const election = await electionService.findById(resolvedElectionId);
     if (!election) {
       return res.status(404).json({ error: 'Not Found', message: `Election with ID ${election_id} not found` });
     }
@@ -40,7 +48,7 @@ router.post('/bulk', csrfProtection, async (req, res) => {
         continue;
       }
       const existing = await constituencyService.findMatching({
-        electionId: parseInt(election_id), department, year, section, activeOnly: false,
+        electionId: resolvedElectionId, department, year, section, activeOnly: false,
       });
       if (existing) {
         skipped.push({ department, year, section, reason: 'already exists' });
@@ -48,7 +56,7 @@ router.post('/bulk', csrfProtection, async (req, res) => {
       }
       try {
         const c = await constituencyService.create({
-          electionId: parseInt(election_id), department, year, section,
+          electionId: resolvedElectionId, department, year, section,
         });
         created.push(c);
       } catch (err) {

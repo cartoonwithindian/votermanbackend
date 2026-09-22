@@ -183,18 +183,24 @@ class StudentController {
    */
   async create(req, res, next) {
     try {
-      const { external_id, name, email } = req.body;
+      const { external_id, name, email, department, year_or_semester, section } = req.body;
 
       // Validate required fields
       const errors = [];
-      if (!external_id || typeof external_id !== 'string' || external_id.trim() === '') {
-        errors.push('external_id is required and must be a non-empty string');
-      }
       if (!name || typeof name !== 'string' || name.trim() === '') {
         errors.push('name is required and must be a non-empty string');
       }
       if (email && typeof email === 'string' && !email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
         errors.push('email format is invalid');
+      }
+      if (department && typeof department !== 'string') {
+        errors.push('department must be a string');
+      }
+      if (year_or_semester && typeof year_or_semester !== 'string') {
+        errors.push('year_or_semester must be a string');
+      }
+      if (section && typeof section !== 'string') {
+        errors.push('section must be a string');
       }
 
       if (errors.length > 0) {
@@ -206,9 +212,12 @@ class StudentController {
       }
 
       const student = await studentService.create({
-        external_id: external_id.trim(),
+        external_id: external_id ? external_id.trim() : null,
         name: name.trim(),
         email: email ? email.trim() : null,
+        department: department && department.trim() ? department.trim() : null,
+        year_or_semester: year_or_semester && year_or_semester.trim() ? year_or_semester.trim() : null,
+        section: section && section.trim() ? section.trim() : null,
       });
 
       res.status(201).json({ data: student });
@@ -230,7 +239,7 @@ class StudentController {
   async update(req, res, next) {
     try {
       const { id } = req.params;
-      const { name, email, voting_eligible, role, department, year_or_semester, section, profile_image_url } = req.body;
+      const { name, email, voting_eligible, role, department, year_or_semester, section, profile_image_url, mobile_number, enrollment_number, student_id, official_email } = req.body;
 
       if (!id || isNaN(parseInt(id))) {
         return res.status(400).json({
@@ -311,6 +320,50 @@ class StudentController {
         });
       }
 
+      if (
+        mobile_number !== undefined &&
+        mobile_number !== null &&
+        (typeof mobile_number !== 'string' || mobile_number.trim() === '' || mobile_number.trim().length > 20)
+      ) {
+        return res.status(400).json({
+          error: 'Validation Error',
+          message: 'mobile_number must be a non-empty string up to 20 characters or null if provided',
+        });
+      }
+
+      if (
+        enrollment_number !== undefined &&
+        enrollment_number !== null &&
+        (typeof enrollment_number !== 'string' || enrollment_number.trim() === '' || enrollment_number.trim().length > 64)
+      ) {
+        return res.status(400).json({
+          error: 'Validation Error',
+          message: 'enrollment_number must be a non-empty string up to 64 characters or null if provided',
+        });
+      }
+
+      if (
+        student_id !== undefined &&
+        student_id !== null &&
+        (typeof student_id !== 'string' || student_id.trim() === '')
+      ) {
+        return res.status(400).json({
+          error: 'Validation Error',
+          message: 'student_id must be a non-empty string or null if provided',
+        });
+      }
+
+      if (
+        official_email !== undefined &&
+        official_email !== null &&
+        (typeof official_email !== 'string' || !official_email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/))
+      ) {
+        return res.status(400).json({
+          error: 'Validation Error',
+          message: 'official_email must be a valid email or null if provided',
+        });
+      }
+
       // Guard: an admin must never demote themselves (lockout protection)
       if (role !== undefined && role !== 'ADMIN' && req.user && req.user.studentId === parseInt(id)) {
         return res.status(400).json({
@@ -328,6 +381,10 @@ class StudentController {
         year_or_semester: year_or_semester !== undefined ? year_or_semester.trim() : undefined,
         section: section !== undefined ? (section ? section.trim().toUpperCase() : null) : undefined,
         profile_image_url: profile_image_url !== undefined ? (profile_image_url ? profile_image_url.trim() : null) : undefined,
+        mobile_number: mobile_number !== undefined ? (mobile_number ? mobile_number.trim() : null) : undefined,
+        enrollment_number: enrollment_number !== undefined ? (enrollment_number ? enrollment_number.trim() : null) : undefined,
+        student_id: student_id !== undefined ? (student_id ? student_id.trim() : null) : undefined,
+        official_email: official_email !== undefined ? (official_email ? official_email.trim() : null) : undefined,
       });
 
       if (!student) {
@@ -399,6 +456,61 @@ class StudentController {
 
       res.json({ data: student });
     } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * DELETE /api/v1/admin/students/:id
+   * Permanently remove a student and their candidacy data.
+   * Students who have already voted cannot be hard-deleted (votes are RESTRICT).
+   */
+  async remove(req, res, next) {
+    try {
+      const { id } = req.params;
+
+      if (!id || isNaN(parseInt(id))) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Invalid student ID',
+        });
+      }
+
+      if (req.user && parseInt(id) === parseInt(req.user.studentId)) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'You cannot delete your own account.',
+        });
+      }
+
+      const deleted = await studentService.remove(parseInt(id));
+
+      if (!deleted) {
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Student with ID ${id} not found`,
+        });
+      }
+
+      await recordAudit('STUDENT_DELETED', {
+        studentId: parseInt(id),
+        ip: req.ip || null,
+        metadata: {
+          name: deleted.name || null,
+          email: deleted.email || null,
+          changedBy: req.user?.email || null,
+        },
+      });
+
+      res.json({ success: true, data: deleted });
+    } catch (err) {
+      if (err && err.code === 'STUDENT_HAS_VOTES') {
+        return res.status(409).json({
+          error: 'Conflict',
+          message: err.message,
+          code: 'STUDENT_HAS_VOTES',
+        });
+      }
       next(err);
     }
   }

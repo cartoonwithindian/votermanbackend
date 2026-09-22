@@ -24,6 +24,7 @@
 
 const { Client, Storage, ID, Permission, Role } = require('node-appwrite');
 const { InputFile } = require('node-appwrite/file');
+const { EJSON } = require('bson');
 const fs = require('fs');
 const path = require('path');
 
@@ -37,6 +38,9 @@ const EXCLUDED_TABLES = new Set([
   'otp_challenges',
   'migrations',
 ]);
+
+/** Mongo collections excluded from snapshots (transient session state, not user data). */
+const EXCLUDED_COLLECTIONS = new Set(['sessions']);
 
 const RETENTION_DEFAULT = 14;
 
@@ -117,9 +121,10 @@ async function readTableRows(pool, table, columns) {
 /**
  * Build the snapshot document.
  * @param {import('pg').Pool} pool
+ * @param {import('mongodb').Db} [mongoDb] - optional MongoDB Db to snapshot alongside Postgres
  * @returns {Promise<Object>}
  */
-async function buildSnapshot(pool) {
+async function buildSnapshot(pool, mongoDb) {
   const tables = await listTables(pool);
   const data = {};
   const rowCountByTable = {};
@@ -132,13 +137,55 @@ async function buildSnapshot(pool) {
     `SELECT COALESCE(MAX(id), 0)::int AS max_migration FROM migrations`
   );
   const maxMigration = migRows[0]?.max_migration ?? 0;
-  return {
+  const snapshot = {
     format: 'voteweb-db-snapshot',
-    version: 1,
+    version: 2,
     created_at: new Date().toISOString(),
     max_migration: maxMigration,
     row_counts: rowCountByTable,
     tables: data,
+  };
+  if (mongoDb) {
+    const mongo = await buildMongoSnapshot(mongoDb);
+    snapshot.mongo = mongo;
+  }
+  return snapshot;
+}
+
+/**
+ * Enumerate real collections in a MongoDB database, excluding transient
+ * session/state collections.
+ * @param {import('mongodb').Db} db
+ * @returns {Promise<string[]>}
+ */
+async function listCollections(db) {
+  const cols = await db.listCollections({}, { nameOnly: true }).toArray();
+  return cols
+    .map((c) => c.name)
+    .filter((name) => !name.startsWith('system.') && !EXCLUDED_COLLECTIONS.has(name))
+    .sort();
+}
+
+/**
+ * Dump every real collection as extended-JSON rows (ObjectId/Date-safe),
+ * mirroring the Postgres side (collection -> array of BSON docs).
+ * @param {import('mongodb').Db} db
+ * @returns {Promise<{row_counts: Object, collections: Object}>}
+ */
+async function buildMongoSnapshot(db) {
+  const names = await listCollections(db);
+  const collections = {};
+  const rowCountByCollection = {};
+  for (const name of names) {
+    const docs = await db.collection(name).find({}, { sort: { _id: 1 } }).toArray();
+    // EJSON.stringify keeps ObjectId/Date/Binary types faithful on restore;
+    // JSON.stringify would mangle them into plain strings.
+    collections[name] = JSON.parse(EJSON.stringify(docs));
+    rowCountByCollection[name] = docs.length;
+  }
+  return {
+    row_counts: rowCountByCollection,
+    collections,
   };
 }
 
@@ -153,10 +200,23 @@ async function runBackup(pool) {
   if (inFlight) return inFlight;
   inFlight = (async () => {
     const dbPool = pool || require('../db').pool;
-    const snapshot = await buildSnapshot(dbPool);
+    let mongoDb = null;
+    try {
+      const mongoClient = require('../db/mongoClient');
+      mongoDb = await mongoClient.getDb();
+    } catch (e) {
+      console.warn('[backup] mongo snapshot skipped:', e.message);
+    }
+    const snapshot = await buildSnapshot(dbPool, mongoDb);
     const json = JSON.stringify(snapshot);
     const bytes = Buffer.byteLength(json, 'utf8');
     const createdAt = snapshot.created_at;
+    const rowCounts = { ...snapshot.row_counts };
+    if (snapshot.mongo) {
+      for (const [c, n] of Object.entries(snapshot.mongo.row_counts)) {
+        rowCounts[`mongo:${c}`] = n;
+      }
+    }
 
     if (!isAppwriteConfigured()) {
       // Local fallback: store JSON file under /tmp/voteweb-backups
@@ -170,7 +230,7 @@ async function runBackup(pool) {
         fileId: fileName,
         url: `${localBaseUrl()}/backups/${fileName}`,
         bytes,
-        rowCounts: snapshot.row_counts,
+        rowCounts,
         createdAt,
       };
     }
@@ -188,7 +248,7 @@ async function runBackup(pool) {
       fileId: file.$id,
       url: `${process.env.APPWRITE_ENDPOINT}/storage/buckets/${bucketId}/files/${file.$id}/view?project=${process.env.APPWRITE_PROJECT_ID}`,
       bytes,
-      rowCounts: snapshot.row_counts,
+      rowCounts,
       createdAt,
     };
   })();
@@ -355,18 +415,35 @@ async function orderTablesByDependencies(pool, tableNames) {
  * Restore rows from a snapshot into the database. Data-only: assumes the
  * schema already exists (migrations already applied). Truncates every table
  * present in the snapshot (single statement = FK-safe), inserts in FK order,
- * then resyncs identity sequences.
+ * then resyncs identity sequences. When the snapshot contains a `mongo`
+ * section, those collections are restored into the configured MongoDB
+ * database as well (drop-and-insert per collection).
  * @param {Object} snapshot
  * @param {import('pg').Pool} [pool]
+ * @param {import('mongodb').Db} [mongoDb] - optional Mongo Db to restore into
  * @returns {Promise<Object>} table -> rows restored
  */
-async function restoreSnapshot(snapshot, pool) {
+async function restoreSnapshot(snapshot, pool, mongoDb) {
   if (!snapshot || snapshot.format !== 'voteweb-db-snapshot') {
     const err = new Error('Not a valid voteweb-db-snapshot file.');
     err.status = 400;
     err.code = 'INVALID_SNAPSHOT';
     throw err;
   }
+  const restored = await restorePostgresSnapshot(snapshot, pool);
+  if (snapshot.mongo && mongoDb) {
+    restored.mongo = await restoreMongoSnapshot(snapshot.mongo, mongoDb);
+  }
+  return restored;
+}
+
+/**
+ * Restore Postgres tables from a snapshot.
+ * @param {Object} snapshot
+ * @param {import('pg').Pool} [pool]
+ * @returns {Promise<Object>} table -> rows restored
+ */
+async function restorePostgresSnapshot(snapshot, pool) {
   const dbPool = pool || require('../db').pool;
   const client = await dbPool.connect();
   const tables = snapshot.tables || {};
@@ -440,14 +517,40 @@ async function restoreSnapshot(snapshot, pool) {
   return restored;
 }
 
+/**
+ * Restore Mongo collections from a snapshot section. Each collection is
+ * dropped then re-inserted (docs carry their original _id via EJSON).
+ * @param {Object} mongoSection - snapshot.mongo from a v2 snapshot
+ * @param {import('mongodb').Db} db
+ * @returns {Promise<Object>} collection -> docs restored
+ */
+async function restoreMongoSnapshot(mongoSection, db) {
+  const collections = mongoSection.collections || {};
+  const restored = {};
+  for (const [name, docs] of Object.entries(collections)) {
+    if (!Array.isArray(docs)) continue;
+    const col = db.collection(name);
+    await col.deleteMany({});
+    if (docs.length > 0) {
+      await col.insertMany(EJSON.deserialize(docs, { relaxed: true }));
+    }
+    restored[name] = docs.length;
+  }
+  return restored;
+}
+
 module.exports = {
   runBackup,
   listBackups,
   downloadBackup,
   pruneBackups,
   restoreSnapshot,
+  restoreMongoSnapshot,
   buildSnapshot,
+  buildMongoSnapshot,
+  listCollections,
   listTables,
   RETENTION_DEFAULT,
   EXCLUDED_TABLES,
+  EXCLUDED_COLLECTIONS,
 };

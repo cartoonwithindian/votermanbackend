@@ -12,7 +12,13 @@ const constituencyService = require('../services/constituencyService');
 const candidateAppService = require('../services/candidateApplicationService');
 const electionService = require('../services/electionService');
 const positionService = require('../services/positionService');
+const { ObjectId } = require('mongodb');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
+const resolveId = (raw) => {
+  if (isMongoOnly && raw && ObjectId.isValid(String(raw))) return String(raw);
+  return parseInt(raw, 10);
+};
 
 class ConstituencyController {
   /**
@@ -36,7 +42,7 @@ class ConstituencyController {
         });
       }
 
-      const eid = isMongoOnly && isNaN(parseInt(election_id)) ? election_id : parseInt(election_id);
+      const eid = resolveId(election_id);
       const election = await electionService.findById(eid);
       if (!election) {
         if (isMongoOnly) {
@@ -62,7 +68,7 @@ class ConstituencyController {
       if (isMongoOnly) {
         console.warn('[constituencyController] list Mongo-only fallback []:', err.message);
         const eid = req.query.election_id;
-        const fallbackId = isNaN(parseInt(eid)) ? eid : parseInt(eid);
+        const fallbackId = resolveId(eid);
         return res.json({ data: [], meta: { count: 0, electionId: fallbackId } });
       }
       next(err);
@@ -90,7 +96,7 @@ class ConstituencyController {
         });
       }
 
-      const cid = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const cid = resolveId(id);
       const constituency = await constituencyService.findById(cid);
       if (!constituency) {
         if (isMongoOnly) {
@@ -132,7 +138,7 @@ class ConstituencyController {
     try {
       const { election_id, department, year, section, name } = req.body;
 
-      if (!election_id || isNaN(parseInt(election_id))) {
+      if (!election_id || (!isMongoOnly && isNaN(parseInt(election_id)))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'election_id is required.',
@@ -155,7 +161,8 @@ class ConstituencyController {
         });
       }
 
-      const election = await electionService.findById(parseInt(election_id));
+      const resolvedElectionId = resolveId(election_id);
+      const election = await electionService.findById(resolvedElectionId);
       if (!election) {
         return res.status(404).json({
           error: 'Not Found',
@@ -171,7 +178,7 @@ class ConstituencyController {
       }
 
       const constituency = await constituencyService.create({
-        electionId: parseInt(election_id),
+        electionId: resolvedElectionId,
         department,
         year,
         section,
@@ -183,7 +190,7 @@ class ConstituencyController {
       // Best-effort — never fails the creation.
       let autoPlaced = [];
       try {
-        const outcome = await candidateAppService.placeUnplacedForElection(parseInt(election_id));
+        const outcome = await candidateAppService.placeUnplacedForElection(resolvedElectionId);
         autoPlaced = outcome.placed;
       } catch (err) {
         console.warn('create constituency: auto ballot placement failed', { electionId: election_id, code: err.code || err.message });
@@ -210,14 +217,15 @@ class ConstituencyController {
       const { id } = req.params;
       const { name, is_active } = req.body;
 
-      if (!id || isNaN(parseInt(id))) {
+      if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid constituency ID',
         });
       }
 
-      const constituency = await constituencyService.findById(parseInt(id));
+      const resolvedId = resolveId(id);
+      const constituency = await constituencyService.findById(resolvedId);
       if (!constituency) {
         return res.status(404).json({
           error: 'Not Found',
@@ -225,7 +233,7 @@ class ConstituencyController {
         });
       }
 
-      if (!(await constituencyService.canModify(parseInt(id)))) {
+      if (!(await constituencyService.canModify(resolvedId))) {
         return res.status(403).json({
           error: 'Forbidden',
           message: 'Cannot modify constituency when election is OPEN or CLOSED',
@@ -245,7 +253,7 @@ class ConstituencyController {
         });
       }
 
-      const updated = await constituencyService.update(parseInt(id), { name, is_active });
+      const updated = await constituencyService.update(resolvedId, { name, is_active });
 
       res.json({ data: updated });
     } catch (err) {
@@ -261,14 +269,15 @@ class ConstituencyController {
     try {
       const { id } = req.params;
 
-      if (!id || isNaN(parseInt(id))) {
+      if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid constituency ID',
         });
       }
 
-      const constituency = await constituencyService.findById(parseInt(id));
+      const resolvedId = resolveId(id);
+      const constituency = await constituencyService.findById(resolvedId);
       if (!constituency) {
         return res.status(404).json({
           error: 'Not Found',
@@ -276,14 +285,14 @@ class ConstituencyController {
         });
       }
 
-      if (!(await constituencyService.canModify(parseInt(id)))) {
+      if (!(await constituencyService.canModify(resolvedId))) {
         return res.status(403).json({
           error: 'Forbidden',
           message: 'Cannot deactivate constituency when election is OPEN or CLOSED',
         });
       }
 
-      const updated = await constituencyService.deactivate(parseInt(id));
+      const updated = await constituencyService.deactivate(resolvedId);
 
       res.json({
         data: updated,

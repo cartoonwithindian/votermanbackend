@@ -6,7 +6,13 @@
 const electionService = require('../services/electionService');
 const candidateAppService = require('../services/candidateApplicationService');
 const { auditLog } = require('../db');
+const { ObjectId } = require('mongodb');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
+const resolveElectionId = (raw) => {
+  if (isMongoOnly && raw && ObjectId.isValid(String(raw))) return String(raw);
+  return parseInt(raw, 10);
+};
 
 const VALID_STATUSES = ['DRAFT', 'SCHEDULED', 'OPEN', 'CLOSED', 'PUBLISHED'];
 
@@ -82,7 +88,7 @@ class ElectionController {
         });
       }
 
-      const lookupId = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const lookupId = resolveElectionId(id);
       const election = await electionService.findById(lookupId);
 
       if (!election) {
@@ -189,7 +195,7 @@ class ElectionController {
       const { id } = req.params;
       const { name, description, start_time, end_time } = req.body;
 
-      if (!id || isNaN(parseInt(id))) {
+      if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid election ID',
@@ -245,7 +251,7 @@ class ElectionController {
         }
       }
 
-      const result = await electionService.update(parseInt(id), {
+      const result = await electionService.update(resolveElectionId(id), {
         name: name?.trim(),
         description: description !== undefined ? (description?.trim() || null) : undefined,
         start_time: start_time ? new Date(start_time).toISOString() : undefined,
@@ -288,7 +294,7 @@ class ElectionController {
       const { id } = req.params;
       const { status } = req.body;
 
-      if (!id || isNaN(parseInt(id))) {
+      if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid election ID',
@@ -303,7 +309,7 @@ class ElectionController {
         });
       }
 
-      const result = await electionService.updateStatus(parseInt(id), status);
+      const result = await electionService.updateStatus(resolveElectionId(id), status);
 
       if (result.error === 'NOT_FOUND') {
         return res.status(404).json({
@@ -330,7 +336,7 @@ class ElectionController {
 
       // Audit log: election status changed
       await auditLog('ELECTION_STATUS_CHANGED', {
-        electionId: parseInt(id),
+        electionId: resolveElectionId(id),
         previousStatus: result.previousStatus,
         newStatus: status,
         adminUserId: req.adminUser?.id,
@@ -344,7 +350,7 @@ class ElectionController {
       let autoPlaced = [];
       if (status === 'OPEN') {
         try {
-          const outcome = await candidateAppService.placeUnplacedForElection(parseInt(id));
+          const outcome = await candidateAppService.placeUnplacedForElection(resolveElectionId(id));
           autoPlaced = outcome.placed;
         } catch (err) {
           console.warn('updateStatus: auto ballot placement failed', { electionId: id, code: err.code || err.message });
@@ -365,14 +371,14 @@ class ElectionController {
     try {
       const { id } = req.params;
 
-      if (!id || isNaN(parseInt(id))) {
+      if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid election ID',
         });
       }
 
-      const result = await electionService.getReadiness(parseInt(id));
+      const result = await electionService.getReadiness(resolveElectionId(id));
 
       if (result.error === 'NOT_FOUND') {
         return res.status(404).json({
@@ -409,7 +415,7 @@ class ElectionController {
         });
       }
 
-      const lookupId = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const lookupId = resolveElectionId(id);
       const result = await electionService.getResults(lookupId);
 
       if (result.error === 'NOT_FOUND') {
@@ -456,7 +462,7 @@ class ElectionController {
     try {
       const { id } = req.params;
 
-      if (!id || isNaN(parseInt(id))) {
+      if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid election ID',
@@ -464,7 +470,7 @@ class ElectionController {
       }
 
       const adminUserId = req.adminUser?.id || 1;
-      const result = await electionService.publishResults(parseInt(id), adminUserId);
+      const result = await electionService.publishResults(resolveElectionId(id), adminUserId);
 
       if (result.error === 'NOT_FOUND') {
         return res.status(404).json({
@@ -482,7 +488,7 @@ class ElectionController {
 
       // Audit log
       await auditLog('RESULTS_PUBLISHED', {
-        electionId: parseInt(id),
+        electionId: resolveElectionId(id),
         adminUserId,
         ipAddress: req.ip,
         userAgent: req.get('User-Agent'),
