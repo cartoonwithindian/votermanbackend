@@ -241,6 +241,7 @@ class StudentService {
         if (data.department !== undefined) updates.department = data.department;
         if (data.year_or_semester !== undefined) { updates.year = data.year_or_semester; updates.year_or_semester = data.year_or_semester; }
         if (data.section !== undefined) updates.section = data.section;
+        if (data.profile_image_url !== undefined) { updates.profileImageUrl = data.profile_image_url; updates.profile_image_url = data.profile_image_url; }
         updates.updatedAt = new Date(); updates.updated_at = new Date();
         let res = null;
         try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
@@ -258,7 +259,7 @@ class StudentService {
         return sanitizeStudent({ ...existing, ...data });
       }
     }
-    const { name, email, voting_eligible, role, department, year_or_semester, section } = data;
+    const { name, email, voting_eligible, role, department, year_or_semester, section, profile_image_url } = data;
 
     // Build SET clauses dynamically so partial updates only touch given fields
     const sets = [];
@@ -292,6 +293,10 @@ class StudentService {
     if (section !== undefined) {
       sets.push(`section = $${idx++}`);
       values.push(section === null ? null : section);
+    }
+    if (profile_image_url !== undefined) {
+      sets.push(`profile_image_url = $${idx++}`);
+      values.push(profile_image_url ? String(profile_image_url).trim() : null);
     }
 
     if (sets.length === 0) {

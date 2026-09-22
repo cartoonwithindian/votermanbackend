@@ -10,6 +10,7 @@
  */
 
 const candidateService = require('../services/candidateService');
+const candidateAppService = require('../services/candidateApplicationService');
 const jsonStore = require('../services/jsonCandidateStore');
 const constituencyService = require('../services/constituencyService');
 const positionService = require('../services/positionService');
@@ -166,7 +167,7 @@ class CandidateController {
   async update(req, res, next) {
     try {
       const { id } = req.params;
-      const { name, description, image_url, display_order, department, year, section, gender } = req.body;
+      const { name, description, image_url, bio, manifesto, application_id, display_order, department, year, section, gender } = req.body;
 
       if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
         return res.status(400).json({
@@ -175,12 +176,44 @@ class CandidateController {
         });
       }
 
-      // Check election state - only allow modification in DRAFT/SCHEDULED
-      const canModify = await candidateService.canModify(isMongoOnly ? id : parseInt(id));
-      if (!canModify) {
+      // Application edits (admin candidates page lists applications): update the
+      // candidate_applications content and mirror to the ballot candidates row.
+      const applicationId = application_id != null && application_id !== '' ? application_id : null;
+      const isApplicationEdit = applicationId !== null;
+
+      if (isApplicationEdit) {
+        const targetId = isMongoOnly ? String(applicationId) : parseInt(applicationId);
+        const app = await candidateAppService.getById(targetId);
+        if (!app) {
+          return res.status(404).json({ error: 'Not Found', message: 'Candidate application not found' });
+        }
+        const status = await candidateService.getElectionStatusByPositionId(app.positionId);
+        if (status === 'CLOSED') {
+          return res.status(403).json({
+            error: 'Forbidden',
+            message: 'Cannot modify candidate when election is CLOSED',
+          });
+        }
+        const updated = await candidateAppService.adminUpdateContent(targetId, {
+          fullName: name,
+          bio: bio !== undefined ? bio : description,
+          manifesto: manifesto !== undefined ? manifesto : description,
+          profilePhotoUrl: image_url,
+          gender,
+          department,
+          year,
+          section,
+        });
+        return res.json({ data: updated });
+      }
+
+      // Check election state - allow modification unless CLOSED (server still
+      // guards via requireAdmin on the routes).
+      const status = await candidateService.getElectionStatusByPositionId(isMongoOnly ? String(id) : parseInt(id));
+      if (status === 'CLOSED') {
         return res.status(403).json({
           error: 'Forbidden',
-          message: 'Cannot modify candidate when election is OPEN or CLOSED',
+          message: 'Cannot modify candidate when election is CLOSED',
         });
       }
 

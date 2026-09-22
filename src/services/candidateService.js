@@ -794,6 +794,40 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
    * standing. Only supports the Mongo-only deployment.
    */
   async findOwnCandidacy(student) {
+    if (!student) return null;
+    if (!isMongoOnly) {
+      const studentId = student.studentId || student.id;
+      if (!studentId) return null;
+      try {
+        const result = await db.query(
+          `SELECT ca.*, p.name AS position_name
+           FROM candidate_applications ca
+           LEFT JOIN positions p ON ca.position_id = p.id
+           WHERE ca.student_id = $1 AND ca.status = 'approved'
+           ORDER BY ca.created_at DESC
+           LIMIT 1`,
+          [studentId]
+        );
+        if (result.rows.length === 0) return null;
+        const row = result.rows[0];
+        return {
+          id: String(row.id),
+          name: row.full_name || '',
+          position_id: row.position_id ?? null,
+          position_name: row.position_name || null,
+          department: row.department || null,
+          year: row.year || null,
+          section: row.section || null,
+          gender: row.gender || null,
+          image_url: row.profile_photo_url || null,
+          manifesto: row.manifesto || '',
+          bio: row.bio || '',
+        };
+      } catch (e) {
+        console.warn('[candidateService] findOwnCandidacy pg failed:', e.message);
+        return null;
+      }
+    }
     const dbc = await getSharedDb();
     if (!dbc || !student || !student.name) return null;
     try {
@@ -821,6 +855,7 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
         gender: doc.gender || null,
         image_url: doc.image_url ?? doc.imageUrl ?? null,
         manifesto: doc.description || doc.manifesto || '',
+        bio: doc.bio || '',
       };
     } catch (e) {
       console.warn('[candidateService] findOwnCandidacy failed:', e.message);
@@ -834,7 +869,42 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
    * updated row or null. Invalidate the candidates cache so the change shows
    * immediately on the student list.
    */
-  async updateOwnManifesto(student, manifesto) {
+  async updateOwnManifesto(student, manifesto, bio) {
+    if (!student) return null;
+    if (!isMongoOnly) {
+      const studentId = student.studentId || student.id;
+      if (!studentId) return null;
+      try {
+        const result = await db.query(
+          `UPDATE candidate_applications
+           SET manifesto = COALESCE($2, manifesto),
+               bio = COALESCE($3, bio),
+               updated_at = NOW()
+           WHERE student_id = $1 AND status = 'approved'
+           RETURNING *`,
+          [studentId, manifesto, bio]
+        );
+        if (result.rows.length === 0) return null;
+        const row = result.rows[0];
+        await this.invalidateCandidates().catch(() => {});
+        return {
+          id: String(row.id),
+          name: row.full_name || '',
+          position_id: row.position_id ?? null,
+          position_name: null,
+          department: row.department || null,
+          year: row.year || null,
+          section: row.section || null,
+          gender: row.gender || null,
+          image_url: row.profile_photo_url || null,
+          manifesto: row.manifesto || '',
+          bio: row.bio || '',
+        };
+      } catch (e) {
+        console.warn('[candidateService] updateOwnManifesto pg failed:', e.message);
+        return null;
+      }
+    }
     const dbc = await getSharedDb();
     if (!dbc || !student || !student.name) return null;
     try {
@@ -851,7 +921,9 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
       }
       const existing = await col.findOne(query);
       if (!existing) return null;
-      const upd = { description: manifesto, updated_at: new Date(), updatedAt: new Date() };
+      const upd = { updated_at: new Date(), updatedAt: new Date() };
+      if (manifesto !== undefined) upd.description = manifesto;
+      if (bio !== undefined) upd.bio = bio;
       await col.updateOne({ _id: existing._id }, { $set: upd });
       await this.invalidateCandidates().catch(() => {});
       return {
@@ -864,7 +936,8 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
         section: existing.section || null,
         gender: existing.gender || null,
         image_url: existing.image_url ?? existing.imageUrl ?? null,
-        manifesto: manifesto || '',
+        manifesto: manifesto || existing.description || existing.manifesto || '',
+        bio: bio || existing.bio || '',
       };
     } catch (e) {
       console.warn('[candidateService] updateOwnManifesto failed:', e.message);

@@ -230,7 +230,7 @@ class StudentController {
   async update(req, res, next) {
     try {
       const { id } = req.params;
-      const { name, email, voting_eligible, role, department, year_or_semester, section } = req.body;
+      const { name, email, voting_eligible, role, department, year_or_semester, section, profile_image_url } = req.body;
 
       if (!id || isNaN(parseInt(id))) {
         return res.status(400).json({
@@ -300,6 +300,17 @@ class StudentController {
         });
       }
 
+      if (
+        profile_image_url !== undefined &&
+        profile_image_url !== null &&
+        (typeof profile_image_url !== 'string' || profile_image_url.trim() === '')
+      ) {
+        return res.status(400).json({
+          error: 'Validation Error',
+          message: 'profile_image_url must be a non-empty string or null if provided',
+        });
+      }
+
       // Guard: an admin must never demote themselves (lockout protection)
       if (role !== undefined && role !== 'ADMIN' && req.user && req.user.studentId === parseInt(id)) {
         return res.status(400).json({
@@ -316,6 +327,7 @@ class StudentController {
         department: department !== undefined ? department.trim() : undefined,
         year_or_semester: year_or_semester !== undefined ? year_or_semester.trim() : undefined,
         section: section !== undefined ? (section ? section.trim().toUpperCase() : null) : undefined,
+        profile_image_url: profile_image_url !== undefined ? (profile_image_url ? profile_image_url.trim() : null) : undefined,
       });
 
       if (!student) {
@@ -516,6 +528,7 @@ class StudentController {
   async myCandidacy(req, res, next) {
     try {
       const student = {
+        studentId: req.user?.studentId,
         name: req.user?.name,
         department: req.user?.department,
         year: req.user?.year,
@@ -539,6 +552,7 @@ class StudentController {
   async updateMyManifesto(req, res, next) {
     try {
       const student = {
+        studentId: req.user?.studentId,
         name: req.user?.name,
         department: req.user?.department,
         year: req.user?.year,
@@ -548,7 +562,8 @@ class StudentController {
       if (!manifesto) {
         return res.status(400).json({ error: 'Validation Error', message: 'manifesto cannot be empty.' });
       }
-      const updated = await candidateService.updateOwnManifesto(student, manifesto);
+      const bio = req.body && req.body.bio !== undefined ? String(req.body.bio ?? '') : undefined;
+      const updated = await candidateService.updateOwnManifesto(student, manifesto, bio);
       if (!updated) {
         return res.status(404).json({ error: 'Not Found', message: 'You are not standing as a candidate.' });
       }

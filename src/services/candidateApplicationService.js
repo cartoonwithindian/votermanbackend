@@ -1357,6 +1357,101 @@ try {
   }
 
   /**
+   * Admin edit of a candidate application's content (no ownership/status gate).
+   * Updates the candidate_applications row and mirrors name/description/image
+   * onto the matching ballot `candidates` row (matched by position + name).
+   */
+  async adminUpdateContent(id, data) {
+    const { fullName, bio, manifesto, profilePhotoUrl, gender, department, year, section } = data || {};
+
+    if (isMongoOnly) {
+      const app = await this.getById(id);
+      if (!app) {
+        const error = new Error('Application not found.');
+        error.code = 'NOT_FOUND';
+        error.status = 404;
+        throw error;
+      }
+      try {
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
+            const updates = { updated_at: new Date(), updatedAt: new Date() };
+            if (fullName !== undefined) updates.full_name = fullName;
+            if (bio !== undefined) updates.bio = bio;
+            if (manifesto !== undefined) updates.manifesto = manifesto;
+            if (profilePhotoUrl !== undefined) { updates.profile_photo_url = profilePhotoUrl === '' ? null : profilePhotoUrl; updates.profilePhotoUrl = profilePhotoUrl === '' ? null : profilePhotoUrl; }
+            if (gender !== undefined) updates.gender = gender;
+            if (department !== undefined) updates.department = department;
+            if (year !== undefined) updates.year = year;
+            if (section !== undefined) updates.section = section;
+            let res = null;
+            try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
+            if (!res || !res.value) res = await col.findOneAndUpdate({ id: String(id) }, { $set: updates }, { returnDocument: 'after' });
+            if (res && res.value) {
+              const doc = res.value;
+              const mapped = { id: doc._id ? String(doc._id) : doc.id, student_id: doc.student_id ?? doc.studentId, full_name: doc.full_name ?? doc.fullName, enrollment_number: doc.enrollment_number ?? doc.enrollmentNumber, department: doc.department, year: doc.year, semester: doc.semester, section: doc.section, position_id: doc.position_id ?? doc.positionId, contesting_position: doc.contesting_position ?? doc.contestingPosition, email: doc.email, phone: doc.phone, profile_photo_url: doc.profile_photo_url ?? doc.profilePhotoUrl, bio: doc.bio, manifesto: doc.manifesto, age: doc.age, date_of_birth: doc.date_of_birth ?? doc.dateOfBirth, gender: doc.gender, aadhar_number: doc.aadhar_number ?? doc.aadharNumber, category: doc.category || 'CR', election_id: doc.election_id ?? doc.electionId, status: doc.status, rejection_reason: doc.rejection_reason, changes_requested_reason: doc.changes_requested_reason, reviewed_by: doc.reviewed_by, submitted_at: doc.submitted_at, created_at: doc.created_at, updated_at: doc.updated_at };
+              return this.formatApplication(mapped);
+            }
+          } finally {}        }
+      } catch (e) {
+        console.warn('[candidateApplicationService] adminUpdateContent mongo fallback:', e.message);
+        if (e.code) throw e;
+      }
+      return { ...app, fullName: fullName ?? app.fullName, bio: bio ?? app.bio, manifesto: manifesto ?? app.manifesto, profilePhotoUrl: profilePhotoUrl ?? app.profilePhotoUrl };
+    }
+
+    const app = await this.getById(id);
+
+    if (!app) {
+      const error = new Error('Application not found.');
+      error.code = 'NOT_FOUND';
+      error.status = 404;
+      throw error;
+    }
+
+    const result = await db.query(
+      `UPDATE candidate_applications
+       SET full_name = COALESCE($2, full_name),
+           bio = COALESCE($3, bio),
+           manifesto = COALESCE($4, manifesto),
+           profile_photo_url = CASE WHEN $5 = '' THEN NULL ELSE COALESCE($5, profile_photo_url) END,
+           gender = COALESCE($6, gender),
+           department = COALESCE($7, department),
+           year = COALESCE($8, year),
+           section = COALESCE($9, section),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id, fullName, bio, manifesto, profilePhotoUrl, gender, department, year, section]
+    );
+
+    // Mirror name/description/image onto the ballot `candidates` row (by position + old name).
+    try {
+      const oldName = app.fullName;
+      const newName = fullName !== undefined ? fullName : app.fullName;
+      const description = bio !== undefined ? bio : (manifesto !== undefined ? manifesto : app.bio || app.manifesto);
+      const image = profilePhotoUrl !== undefined ? profilePhotoUrl : app.profilePhotoUrl;
+      const posId = app.positionId || app.position_id;
+      if (posId && oldName) {
+        await db.query(
+          `UPDATE candidates
+           SET name = $3,
+               description = COALESCE($4, description),
+               image_url = CASE WHEN $5 = '' THEN NULL ELSE COALESCE($5, image_url) END,
+               updated_at = NOW()
+           WHERE position_id = $1 AND LOWER(name) = LOWER($2)`,
+          [posId, oldName, newName, description || null, image || null]
+        );
+      }
+    } catch (e) {
+      console.warn('[candidateApplicationService] adminUpdateContent ballot mirror:', e.message);
+    }
+
+    return this.formatApplication(result.rows[0]);
+  }
+
+  /**
    * Get access info for candidate portal
    */
   async getAccessInfo(studentId) {
