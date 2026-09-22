@@ -287,6 +287,8 @@ app.use('/api/v1/uploads', uploadsRoutes);
 // PATCH allows self-service name/phone/avatar update; avatar is an Appwrite Storage URL
 app.get('/api/v1/students/profile', requireAuth, studentController.profile.bind(studentController));
 app.patch('/api/v1/students/profile', requireAuth, studentController.updateProfile.bind(studentController));
+app.get('/api/v1/students/me/candidacy', requireAuth, studentController.myCandidacy.bind(studentController));
+app.patch('/api/v1/students/me/candidacy', requireAuth, studentController.updateMyManifesto.bind(studentController));
 
 // =====================================================
 // ADMIN ROUTES (authentication + admin role required)

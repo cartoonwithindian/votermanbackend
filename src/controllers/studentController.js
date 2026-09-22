@@ -4,6 +4,7 @@
  */
 
 const studentService = require('../services/studentService');
+const candidateService = require('../services/candidateService');
 const { recordAudit } = require('../lib/authDb');
 const { getMongoDbName } = require('../utils/mongoDbName');
 
@@ -505,6 +506,56 @@ class StudentController {
           voting_eligible,
         },
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/v1/students/me/candidacy
+   * Return the logged-in student's standing ballot row (their candidacy) so
+   * the student portal can show an edit form. 404 when not standing.
+   */
+  async myCandidacy(req, res, next) {
+    try {
+      const student = {
+        name: req.user?.name,
+        department: req.user?.department,
+        year: req.user?.year,
+        section: req.user?.section,
+      };
+      const candidacy = await candidateService.findOwnCandidacy(student);
+      if (!candidacy) {
+        return res.status(404).json({ error: 'Not Found', message: 'You are not standing as a candidate.' });
+      }
+      res.json({ data: candidacy });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/students/me/candidacy
+   * Update the logged-in student's manifesto (own ballot row only). Body:
+   * { manifesto: string }. 404 when not standing.
+   */
+  async updateMyManifesto(req, res, next) {
+    try {
+      const student = {
+        name: req.user?.name,
+        department: req.user?.department,
+        year: req.user?.year,
+        section: req.user?.section,
+      };
+      const manifesto = req.body && (String(req.body.manifesto ?? req.body.description ?? '').trim());
+      if (!manifesto) {
+        return res.status(400).json({ error: 'Validation Error', message: 'manifesto cannot be empty.' });
+      }
+      const updated = await candidateService.updateOwnManifesto(student, manifesto);
+      if (!updated) {
+        return res.status(404).json({ error: 'Not Found', message: 'You are not standing as a candidate.' });
+      }
+      res.json({ data: updated });
     } catch (err) {
       next(err);
     }

@@ -778,6 +778,101 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
     await this.invalidateCandidates();
     return result.rows[0];
   }
+
+  /**
+   * Find the ballot row belonging to the logged-in student. Candidates are
+   * matched by name + cohort (department/year/section) since ballot rows are
+   * not linked to a student account. Returns null when the student is not
+   * standing. Only supports the Mongo-only deployment.
+   */
+  async findOwnCandidacy(student) {
+    const { MongoClient } = require('mongodb');
+    const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+    if (!uri || !student || !student.name) return null;
+    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2500, connectTimeoutMS: 2500 });
+    try {
+      await client.connect();
+      const col = client.db(getMongoDbName()).collection('candidates');
+      const cohort = {
+        name: student.name,
+        department: student.department || undefined,
+        year: student.year ? normalizeYear(student.year) : undefined,
+        section: student.section || undefined,
+      };
+      const query = {};
+      for (const [k, v] of Object.entries(cohort)) {
+        if (v !== undefined) query[k] = v;
+      }
+      const doc = await col.findOne(query);
+      if (!doc) return null;
+      return {
+        id: String(doc._id),
+        name: doc.name || '',
+        position_id: doc.position_id ?? doc.positionId ?? null,
+        position_name: doc.position_name || null,
+        department: doc.department || null,
+        year: doc.year || null,
+        section: doc.section || null,
+        gender: doc.gender || null,
+        image_url: doc.image_url ?? doc.imageUrl ?? null,
+        manifesto: doc.description || doc.manifesto || '',
+      };
+    } catch (e) {
+      console.warn('[candidateService] findOwnCandidacy failed:', e.message);
+      return null;
+    } finally {
+      await client.close().catch(() => {});
+    }
+  }
+
+  /**
+   * Update the standing candidate's manifesto (description). Belongs to the
+   * logged-in student (matched by the same name + cohort query). Returns the
+   * updated row or null. Invalidate the candidates cache so the change shows
+   * immediately on the student list.
+   */
+  async updateOwnManifesto(student, manifesto) {
+    const { MongoClient } = require('mongodb');
+    const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+    if (!uri || !student || !student.name) return null;
+    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2500, connectTimeoutMS: 2500 });
+    try {
+      await client.connect();
+      const col = client.db(getMongoDbName()).collection('candidates');
+      const cohort = {
+        name: student.name,
+        department: student.department || undefined,
+        year: student.year ? normalizeYear(student.year) : undefined,
+        section: student.section || undefined,
+      };
+      const query = {};
+      for (const [k, v] of Object.entries(cohort)) {
+        if (v !== undefined) query[k] = v;
+      }
+      const existing = await col.findOne(query);
+      if (!existing) return null;
+      const upd = { description: manifesto, updated_at: new Date(), updatedAt: new Date() };
+      await col.updateOne({ _id: existing._id }, { $set: upd });
+      await this.invalidateCandidates().catch(() => {});
+      return {
+        id: String(existing._id),
+        name: existing.name || '',
+        position_id: existing.position_id ?? existing.positionId ?? null,
+        position_name: existing.position_name || null,
+        department: existing.department || null,
+        year: existing.year || null,
+        section: existing.section || null,
+        gender: existing.gender || null,
+        image_url: existing.image_url ?? existing.imageUrl ?? null,
+        manifesto: manifesto || '',
+      };
+    } catch (e) {
+      console.warn('[candidateService] updateOwnManifesto failed:', e.message);
+      return null;
+    } finally {
+      await client.close().catch(() => {});
+    }
+  }
 }
 
 module.exports = new CandidateService();
