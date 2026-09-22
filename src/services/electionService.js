@@ -7,10 +7,12 @@ const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getClient: getSharedClient } = require('../db/mongoClient');
 const redisCache = require('../utils/redisCache');
+const { memoryCacheGet, memoryCacheSet, memoryCacheDelPrefix } = require('../utils/memoryCache');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 const ELECTIONS_CACHE_KEY_PREFIX = 'elections:v1:';
 const ELECTIONS_CACHE_TTL = 30;
+const ELECTIONS_MEMORY_CACHE_TTL = 10000;
 
 // Valid status transitions
 const STATUS_TRANSITIONS = {
@@ -31,14 +33,20 @@ class ElectionService {
    * Find all elections
    */
   async findAll(options = {}) {
+    const memoryKey = `${ELECTIONS_CACHE_KEY_PREFIX}mem:${this.buildElectionsCacheKey(options)}`;
+    const mem = memoryCacheGet(memoryKey);
+    if (mem !== undefined) return mem;
     const cacheKey = redisCache.isEnabled() ? this.buildElectionsCacheKey(options) : null;
     if (cacheKey) {
       const cached = await redisCache.getKey(cacheKey);
       if (cached !== null) {
-        return Array.isArray(cached) ? cached : [];
+        const rows = Array.isArray(cached) ? cached : [];
+        memoryCacheSet(memoryKey, rows, ELECTIONS_MEMORY_CACHE_TTL);
+        return rows;
       }
     }
     const rows = await this._loadElectionsRows(options);
+    memoryCacheSet(memoryKey, rows, ELECTIONS_MEMORY_CACHE_TTL);
     if (cacheKey) {
       await redisCache.setKey(cacheKey, rows, ELECTIONS_CACHE_TTL);
     }
@@ -52,6 +60,7 @@ class ElectionService {
   }
 
   async invalidateElections() {
+    memoryCacheDelPrefix(`${ELECTIONS_CACHE_KEY_PREFIX}mem:`);
     await redisCache.deleteKeysWithPrefix('elections:');
   }
 

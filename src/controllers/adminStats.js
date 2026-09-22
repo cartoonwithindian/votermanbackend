@@ -8,14 +8,18 @@ const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getClient: getSharedClient } = require('../db/mongoClient');
 const redisCache = require('../utils/redisCache');
+const { memoryCacheGet, memoryCacheSet } = require('../utils/memoryCache');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 async function getStats(req, res) {
   if (isMongoOnly) {
+    const mem = memoryCacheGet('admin:stats:mem:v1');
+    if (mem !== undefined) return res.json(mem);
     const cacheKey = redisCache.isEnabled() ? 'admin:stats:v1' : null;
     if (cacheKey) {
       const cached = await redisCache.getKey(cacheKey);
       if (cached !== null) {
+        memoryCacheSet('admin:stats:mem:v1', cached, 12000);
         return res.json(cached);
       }
     }
@@ -43,6 +47,7 @@ async function getStats(req, res) {
     if (cacheKey) {
       await redisCache.setKey(cacheKey, payload, 12);
     }
+    memoryCacheSet('admin:stats:mem:v1', payload, 12000);
     return res.json(payload);
   }
   try {

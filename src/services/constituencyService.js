@@ -12,6 +12,7 @@ const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getClient: getSharedClient } = require('../db/mongoClient');
 const redisCache = require('../utils/redisCache');
+const { memoryCacheGet, memoryCacheSet, memoryCacheDelPrefix } = require('../utils/memoryCache');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -44,11 +45,16 @@ class ConstituencyService {
    * Find all constituencies for an election.
    */
   async findByElectionId(electionId, options = {}) {
+    const memoryKey = `${CONSTITUENCIES_CACHE_KEY_PREFIX}mem:${this.buildConstituencyCacheKey(electionId, options)}`;
+    const mem = memoryCacheGet(memoryKey);
+    if (mem !== undefined) return mem;
     const cacheKey = redisCache.isEnabled() ? this.buildConstituencyCacheKey(electionId, options) : null;
     if (cacheKey) {
       const cached = await redisCache.getKey(cacheKey);
       if (cached !== null) {
-        return Array.isArray(cached) ? cached : [];
+        const rows = Array.isArray(cached) ? cached : [];
+        memoryCacheSet(memoryKey, rows, CONSTITUENCIES_CACHE_TTL * 1000);
+        return rows;
       }
     }
     if (isMongoOnly) {
@@ -75,6 +81,7 @@ class ConstituencyService {
           updated_at: d.updated_at ?? d.updatedAt,
         }));
         if (options.activeOnly !== false) rows = rows.filter(r => r.is_active !== false);
+        memoryCacheSet(memoryKey, rows, CONSTITUENCIES_CACHE_TTL * 1000);
         if (cacheKey) {
           await redisCache.setKey(cacheKey, rows, CONSTITUENCIES_CACHE_TTL);
         }
@@ -98,6 +105,7 @@ class ConstituencyService {
 
     const result = await db.query(query, params);
     const rows = result.rows;
+    memoryCacheSet(memoryKey, rows, CONSTITUENCIES_CACHE_TTL * 1000);
     if (cacheKey) {
       await redisCache.setKey(cacheKey, rows, CONSTITUENCIES_CACHE_TTL);
     }
@@ -111,6 +119,7 @@ class ConstituencyService {
   }
 
   async invalidateConstituencies() {
+    memoryCacheDelPrefix(`${CONSTITUENCIES_CACHE_KEY_PREFIX}mem:`);
     await redisCache.deleteKeysWithPrefix('constituencies:');
   }
 

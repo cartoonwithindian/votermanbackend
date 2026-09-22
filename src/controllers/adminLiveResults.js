@@ -9,14 +9,18 @@ const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getClient: getSharedClient } = require('../db/mongoClient');
 const redisCache = require('../utils/redisCache');
+const { memoryCacheGet, memoryCacheSet } = require('../utils/memoryCache');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 async function getLive(req, res) {
   if (isMongoOnly) {
+    const mem = memoryCacheGet('admin:live:mem:v1');
+    if (mem !== undefined) return res.json(mem);
     const cacheKey = redisCache.isEnabled() ? 'admin:live:v1' : null;
     if (cacheKey) {
       const cached = await redisCache.getKey(cacheKey);
       if (cached !== null) {
+        memoryCacheSet('admin:live:mem:v1', cached, 12000);
         return res.json(cached);
       }
     }
@@ -63,6 +67,7 @@ async function getLive(req, res) {
       if (cacheKey) {
         await redisCache.setKey(cacheKey, payload, 12);
       }
+      memoryCacheSet('admin:live:mem:v1', payload, 12000);
       return res.json(payload);
     } catch (e) {
       console.error('admin live mongo failed:', e.message);

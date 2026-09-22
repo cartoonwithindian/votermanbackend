@@ -8,6 +8,7 @@ const notificationService = require('./notificationService');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getClient: getSharedClient } = require('../db/mongoClient');
 const redisCache = require('../utils/redisCache');
+const { memoryCacheGet, memoryCacheSet, memoryCacheDelPrefix } = require('../utils/memoryCache');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 const ANNOUNCEMENTS_CACHE_KEY_PREFIX = 'announcements:v1:';
@@ -64,11 +65,16 @@ class AnnouncementService {
    * List announcements with filters
    */
   async list({ electionId, publishedOnly = false, audience, limit = 50, offset = 0 }) {
+    const mem = `${ANNOUNCEMENTS_CACHE_KEY_PREFIX}mem:${this.buildAnnouncementCacheKey({ electionId, publishedOnly, audience, limit, offset })}`;
+    const memRows = memoryCacheGet(mem);
+    if (memRows !== undefined) return memRows;
     const cacheKey = redisCache.isEnabled() ? this.buildAnnouncementCacheKey({ electionId, publishedOnly, audience, limit, offset }) : null;
     if (cacheKey) {
       const cached = await redisCache.getKey(cacheKey);
       if (cached !== null) {
-        return Array.isArray(cached) ? cached : [];
+        const rows = Array.isArray(cached) ? cached : [];
+        memoryCacheSet(mem, rows, ANNOUNCEMENTS_CACHE_TTL * 1000);
+        return rows;
       }
     }
     if (isMongoOnly) {
@@ -93,6 +99,7 @@ class AnnouncementService {
             published_at: d.published_at ?? d.publishedAt ?? null,
             created_at: d.created_at ?? d.createdAt ?? new Date().toISOString(),
           }));
+          memoryCacheSet(mem, rows, ANNOUNCEMENTS_CACHE_TTL * 1000);
           if (cacheKey) {
             await redisCache.setKey(cacheKey, rows, ANNOUNCEMENTS_CACHE_TTL);
           }
@@ -101,6 +108,7 @@ class AnnouncementService {
       } catch (e) {
         console.warn('[announcementService] list mongo fallback to []:', e.message);
       }
+      memoryCacheSet(mem, [], ANNOUNCEMENTS_CACHE_TTL * 1000);
       if (cacheKey) {
         await redisCache.setKey(cacheKey, [], ANNOUNCEMENTS_CACHE_TTL);
       }
@@ -132,6 +140,7 @@ class AnnouncementService {
     try {
       const result = await db.query(query, params);
       const rows = result.rows;
+      memoryCacheSet(mem, rows, ANNOUNCEMENTS_CACHE_TTL * 1000);
       if (cacheKey) {
         await redisCache.setKey(cacheKey, rows, ANNOUNCEMENTS_CACHE_TTL);
       }
@@ -151,6 +160,7 @@ class AnnouncementService {
   }
 
   async invalidateAnnouncements() {
+    memoryCacheDelPrefix(`${ANNOUNCEMENTS_CACHE_KEY_PREFIX}mem:`);
     await redisCache.deleteKeysWithPrefix('announcements:');
   }
 
