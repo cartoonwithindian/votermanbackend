@@ -14,11 +14,13 @@ const { normalizeYear } = require('../utils/yearNormalizer');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getDb: getSharedDb } = require('../db/mongoClient');
 const redisCache = require('../utils/redisCache');
+const { memoryCacheGet, memoryCacheSet, memoryCacheDelPrefix } = require('../utils/memoryCache');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 const CANDIDATES_CACHE_KEY_PREFIX = 'candidates:v1:';
 const CANDIDATES_CACHE_TTL = 60;
+const MEMORY_CACHE_TTL = 15000;
 
 class CandidateService {
   /**
@@ -26,14 +28,14 @@ class CandidateService {
    * collection once. Ballot rows created via add-to-ballot store position_id
    * only; students and admin UIs render position_name.
    */
-  async enrichPositionNames(rows) {
+  async enrichPositionNames(rows, positions) {
     if (!rows || !rows.length) return rows;
     const missing = rows.some(r => !(r.position_name || r.position));
     if (!missing) return rows;
     const db = await getSharedDb();
     if (!db) return rows;
     try {
-      const positions = await db.collection('positions').find({}).toArray();
+      if (!positions) positions = await db.collection('positions').find({}).toArray();
       const byId = new Map();
       for (const p of positions) {
         byId.set(String(p._id), p);
@@ -57,16 +59,18 @@ class CandidateService {
    * into the public student list. Uses the same positions→constituencies→
    * elections join as the admin list.
    */
-  async filterOpenElectionRows(rows) {
+  async filterOpenElectionRows(rows, preloaded) {
     if (!rows || !rows.length) return rows;
     try {
       const dbc = await getSharedDb();
       if (!dbc) return rows;
-      const [positionDocs, constituentDocs, electionDocs] = await Promise.all([
-        dbc.collection('positions').find({}).toArray(),
-        dbc.collection('constituencies').find({}).toArray(),
-        dbc.collection('elections').find({}).toArray(),
-      ]);
+      let [positionDocs, constituentDocs, electionDocs] = preloaded && preloaded.positions && preloaded.constituencies && preloaded.elections
+        ? [preloaded.positions, preloaded.constituencies, preloaded.elections]
+        : await Promise.all([
+            dbc.collection('positions').find({}).toArray(),
+            dbc.collection('constituencies').find({}).toArray(),
+            dbc.collection('elections').find({}).toArray(),
+          ]);
         const positionById = new Map();
         for (const p of positionDocs) {
           positionById.set(String(p._id), p);
@@ -135,14 +139,20 @@ class CandidateService {
    * @param {string} options.section - Filter by section
    */
   async findApproved(options = {}) {
+    const memoryKey = `${CANDIDATES_CACHE_KEY_PREFIX}mem:${this.buildCandidateCacheKey(options)}`;
+    const mem = memoryCacheGet(memoryKey);
+    if (mem !== undefined) return mem;
     const cacheKey = redisCache.isEnabled() ? this.buildCandidateCacheKey(options) : null;
     if (cacheKey) {
       const cached = await redisCache.getKey(cacheKey);
       if (cached !== null) {
-        return Array.isArray(cached) ? cached : [];
+        const rows = Array.isArray(cached) ? cached : [];
+        memoryCacheSet(memoryKey, rows, MEMORY_CACHE_TTL);
+        return rows;
       }
     }
     const rows = await this._loadApprovedRows(options);
+    memoryCacheSet(memoryKey, rows, MEMORY_CACHE_TTL);
     if (cacheKey) {
       await redisCache.setKey(cacheKey, rows, CANDIDATES_CACHE_TTL);
     }
@@ -156,6 +166,7 @@ class CandidateService {
   }
 
   async invalidateCandidates() {
+    memoryCacheDelPrefix(`${CANDIDATES_CACHE_KEY_PREFIX}mem:`);
     await redisCache.deleteKeysWithPrefix(CANDIDATES_CACHE_KEY_PREFIX);
   }
 
@@ -173,17 +184,26 @@ class CandidateService {
     // 1) Atlas (MONGODB_URI) — preferred when configured
     try {
       if (await mongoStore.hasMongoCandidates()) {
-        const mongoRows = await mongoStore.readMongoCandidates();
-        if (mongoRows && mongoRows.length) {
-          const enriched = await this.enrichPositionNames(mongoRows);
-          const inOpen = await this.filterOpenElectionRows(enriched);
-          // Ballot rows in Mongo store raw candidate fields (_id, name,
-          // position_name, image_url/description). Map to the same
-          // CandidateRow shape the Postgres/JSON paths return so the
-          // frontend always sees `id`, `manifesto`, `election_*`.
-          const mapped = this.mapBallotRow(inOpen);
-          const { rows } = mongoStore.filterMongoRows(mapped, { gender, department, year, section, limit, offset });
-          return rows;
+        const dbc = await getSharedDb();
+        if (dbc) {
+          const [mongoRows, posDocs, ctDocs, elecDocs] = await Promise.all([
+            dbc.collection('candidates').find({}).toArray(),
+            dbc.collection('positions').find({}).toArray(),
+            dbc.collection('constituencies').find({}).toArray(),
+            dbc.collection('elections').find({}).toArray(),
+          ]);
+          if (mongoRows && mongoRows.length) {
+            const preloaded = { positions: posDocs, constituencies: ctDocs, elections: elecDocs };
+            const enriched = await this.enrichPositionNames(mongoRows, posDocs);
+            const inOpen = await this.filterOpenElectionRows(enriched, preloaded);
+            // Ballot rows in Mongo store raw candidate fields (_id, name,
+            // position_name, image_url/description). Map to the same
+            // CandidateRow shape the Postgres/JSON paths return so the
+            // frontend always sees `id`, `manifesto`, `election_*`.
+            const mapped = this.mapBallotRow(inOpen);
+            const { rows } = mongoStore.filterMongoRows(mapped, { gender, department, year, section, limit, offset });
+            return rows;
+          }
         }
       }
     } catch (e) {
@@ -278,13 +298,22 @@ class CandidateService {
     // Priority: Atlas -> JSON -> DB
     try {
       if (await mongoStore.hasMongoCandidates()) {
-        const mongoRows = await mongoStore.readMongoCandidates();
-        if (mongoRows && mongoRows.length) {
-          const enriched = await this.enrichPositionNames(mongoRows);
-          const inOpen = await this.filterOpenElectionRows(enriched);
-          const mapped = this.mapBallotRow(inOpen);
-          const found = mapped.find(r => String(r.id) === String(id));
-          if (found) return found;
+        const dbc = await getSharedDb();
+        if (dbc) {
+          const [mongoRows, posDocs, ctDocs, elecDocs] = await Promise.all([
+            dbc.collection('candidates').find({}).toArray(),
+            dbc.collection('positions').find({}).toArray(),
+            dbc.collection('constituencies').find({}).toArray(),
+            dbc.collection('elections').find({}).toArray(),
+          ]);
+          if (mongoRows && mongoRows.length) {
+            const preloaded = { positions: posDocs, constituencies: ctDocs, elections: elecDocs };
+            const enriched = await this.enrichPositionNames(mongoRows, posDocs);
+            const inOpen = await this.filterOpenElectionRows(enriched, preloaded);
+            const mapped = this.mapBallotRow(inOpen);
+            const found = mapped.find(r => String(r.id) === String(id));
+            if (found) return found;
+          }
         }
       }
     } catch (e) {
@@ -356,12 +385,17 @@ class CandidateService {
    * Count approved candidates with optional filters.
    */
   async countApproved(options = {}) {
+    const memoryKey = `${CANDIDATES_CACHE_KEY_PREFIX}mem:count:${options.department ?? 'all'}:${options.year ?? 'all'}:${options.section ?? 'all'}:${options.gender ?? 'all'}`;
+    const mem = memoryCacheGet(memoryKey);
+    if (mem !== undefined) return mem;
     // Priority: Atlas -> JSON -> DB
     try {
       if (await mongoStore.hasMongoCandidates()) {
-        const mongoRows = await mongoStore.readMongoCandidates();
-        if (mongoRows && mongoRows.length) {
+        const dbc = await getSharedDb();
+        if (dbc) {
+          const mongoRows = await dbc.collection('candidates').find({}).toArray();
           const { total } = mongoStore.filterMongoRows(mongoRows, { ...options, limit: 100000, offset: 0 });
+          memoryCacheSet(memoryKey, total, MEMORY_CACHE_TTL);
           return total;
         }
       }
@@ -373,6 +407,7 @@ class CandidateService {
       if (raw && Array.isArray(raw)) {
         const mapped = raw.map((c, idx) => jsonStore.mapJsonToRow(c, idx));
         const { total } = jsonStore.filterJsonCandidates(mapped, { ...options, limit: 100000, offset: 0 });
+        memoryCacheSet(memoryKey, total, MEMORY_CACHE_TTL);
         return total;
       }
     }

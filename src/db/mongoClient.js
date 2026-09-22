@@ -16,7 +16,13 @@ async function getClient() {
   if (!uri) return null;
   if (client) return client;
   if (clientPromise) return clientPromise;
-  clientPromise = new MongoClient(uri, { serverSelectionTimeoutMS: 5000, connectTimeoutMS: 5000 }).connect()
+  clientPromise = new MongoClient(uri, {
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 5000,
+    maxPoolSize: 50,
+    minPoolSize: 1,
+    maxIdleTimeMS: 120000,
+  }).connect()
     .then((c) => {
       client = c;
       return c;
