@@ -6,7 +6,12 @@
 const db = require('../db');
 const notificationService = require('./notificationService');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
+const redisCache = require('../utils/redisCache');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
+const ANNOUNCEMENTS_CACHE_KEY_PREFIX = 'announcements:v1:';
+const ANNOUNCEMENTS_CACHE_TTL = 30;
 
 class AnnouncementService {
   /**
@@ -50,6 +55,8 @@ class AnnouncementService {
       await this.notifyCandidates(announcement);
     }
 
+    await this.invalidateAnnouncements();
+
     return announcement;
   }
 
@@ -57,38 +64,45 @@ class AnnouncementService {
    * List announcements with filters
    */
   async list({ electionId, publishedOnly = false, audience, limit = 50, offset = 0 }) {
+    const cacheKey = redisCache.isEnabled() ? this.buildAnnouncementCacheKey({ electionId, publishedOnly, audience, limit, offset }) : null;
+    if (cacheKey) {
+      const cached = await redisCache.getKey(cacheKey);
+      if (cached !== null) {
+        return Array.isArray(cached) ? cached : [];
+      }
+    }
     if (isMongoOnly) {
       try {
-        const { MongoClient } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('announcements');
-            const filter = {};
-            if (publishedOnly) filter.is_published = true;
-            if (electionId) filter.election_id = parseInt(electionId);
-            // audience filtering done in JS for Mongo schema variance
-            let docs = await col.find(filter).sort({ created_at: -1, createdAt: -1 }).limit(limit).skip(offset).toArray();
-            if (audience) docs = docs.filter(d => d.audience === audience || d.audience === 'all');
-            return docs.map(d => ({
-              id: d._id ? String(d._id) : d.id,
-              election_id: d.election_id ?? d.electionId ?? null,
-              title: d.title,
-              message: d.message,
-              audience: d.audience || 'all',
-              priority: d.priority || 'normal',
-              is_published: d.is_published ?? d.isPublished ?? false,
-              published_at: d.published_at ?? d.publishedAt ?? null,
-              created_at: d.created_at ?? d.createdAt ?? new Date().toISOString(),
-            }));
-          } finally {
-            await client.close().catch(() => {});
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('announcements');
+          const filter = {};
+          if (publishedOnly) filter.is_published = true;
+          if (electionId) filter.election_id = parseInt(electionId);
+          // audience filtering done in JS for Mongo schema variance
+          let docs = await col.find(filter).sort({ created_at: -1, createdAt: -1 }).limit(limit).skip(offset).toArray();
+          if (audience) docs = docs.filter(d => d.audience === audience || d.audience === 'all');
+          const rows = docs.map(d => ({
+            id: d._id ? String(d._id) : d.id,
+            election_id: d.election_id ?? d.electionId ?? null,
+            title: d.title,
+            message: d.message,
+            audience: d.audience || 'all',
+            priority: d.priority || 'normal',
+            is_published: d.is_published ?? d.isPublished ?? false,
+            published_at: d.published_at ?? d.publishedAt ?? null,
+            created_at: d.created_at ?? d.createdAt ?? new Date().toISOString(),
+          }));
+          if (cacheKey) {
+            await redisCache.setKey(cacheKey, rows, ANNOUNCEMENTS_CACHE_TTL);
           }
+          return rows;
         }
       } catch (e) {
         console.warn('[announcementService] list mongo fallback to []:', e.message);
+      }
+      if (cacheKey) {
+        await redisCache.setKey(cacheKey, [], ANNOUNCEMENTS_CACHE_TTL);
       }
       return [];
     }
@@ -117,7 +131,11 @@ class AnnouncementService {
 
     try {
       const result = await db.query(query, params);
-      return result.rows;
+      const rows = result.rows;
+      if (cacheKey) {
+        await redisCache.setKey(cacheKey, rows, ANNOUNCEMENTS_CACHE_TTL);
+      }
+      return rows;
     } catch (e) {
       if (isMongoOnly) {
         console.warn('[announcementService] list fallback to []:', e.message);
@@ -127,38 +145,41 @@ class AnnouncementService {
     }
   }
 
+  buildAnnouncementCacheKey({ electionId, publishedOnly = false, audience, limit = 50, offset = 0 }) {
+    const safe = (v) => String(v ?? '').trim().toLowerCase() !== '' ? String(v).trim().toLowerCase() : 'all';
+    return `${ANNOUNCEMENTS_CACHE_KEY_PREFIX}${safe(electionId)}:${publishedOnly ? 'published' : 'all'}:${safe(audience)}:${limit ?? 50}:${offset ?? 0}`;
+  }
+
+  async invalidateAnnouncements() {
+    await redisCache.deleteKeysWithPrefix('announcements:');
+  }
+
   /**
    * Get single announcement by ID
    */
   async getById(id, publishedOnly = false) {
     if (isMongoOnly) {
       try {
-        const { MongoClient, ObjectId } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('announcements');
-            let doc = null;
-            try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
-            if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
-            if (!doc) return null;
-            if (publishedOnly && !(doc.is_published ?? doc.isPublished)) return null;
-            return {
-              id: doc._id ? String(doc._id) : doc.id,
-              election_id: doc.election_id ?? doc.electionId ?? null,
-              title: doc.title,
-              message: doc.message,
-              audience: doc.audience || 'all',
-              priority: doc.priority || 'normal',
-              is_published: doc.is_published ?? doc.isPublished ?? false,
-              published_at: doc.published_at ?? doc.publishedAt ?? null,
-              created_at: doc.created_at ?? doc.createdAt ?? new Date().toISOString(),
-            };
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const { ObjectId } = require('mongodb');
+          const col = client.db(getMongoDbName()).collection('announcements');
+          let doc = null;
+          try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
+          if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
+          if (!doc) return null;
+          if (publishedOnly && !(doc.is_published ?? doc.isPublished)) return null;
+          return {
+            id: doc._id ? String(doc._id) : doc.id,
+            election_id: doc.election_id ?? doc.electionId ?? null,
+            title: doc.title,
+            message: doc.message,
+            audience: doc.audience || 'all',
+            priority: doc.priority || 'normal',
+            is_published: doc.is_published ?? doc.isPublished ?? false,
+            published_at: doc.published_at ?? doc.publishedAt ?? null,
+            created_at: doc.created_at ?? doc.createdAt ?? new Date().toISOString(),
+          };
         }
       } catch (e) {
         console.warn('[announcementService] getById mongo fallback to null:', e.message);
@@ -242,6 +263,8 @@ class AnnouncementService {
       await this.notifyCandidates(announcement);
     }
 
+    await this.invalidateAnnouncements();
+
     return announcement;
   }
 
@@ -253,6 +276,9 @@ class AnnouncementService {
       'DELETE FROM announcements WHERE id = $1 RETURNING id',
       [id]
     );
+    if (result.rowCount > 0) {
+      await this.invalidateAnnouncements();
+    }
     return result.rowCount > 0;
   }
 

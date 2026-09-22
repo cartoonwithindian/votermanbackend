@@ -10,6 +10,7 @@ const positionController = require('../controllers/positionController');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { csrfProtection } = require('../middleware/csrfProtection');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -18,15 +19,11 @@ const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || p
 router.get('/', requireAdmin, async (req, res, next) => {
   if (isMongoOnly) {
     try {
-      const { MongoClient } = require('mongodb');
-      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-      if (uri) {
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
+      const client = await getSharedClient();
+      if (client) {
         try {
           const col = client.db(getMongoDbName()).collection(process.env.MONGODB_POSITIONS_COLLECTION || 'positions');
           const docs = await col.find({}).sort({ display_order: 1 }).limit(200).toArray();
-          await client.close().catch(() => {});
           if (docs.length) {
             const mapped = docs.map((d) => ({
               id: d._id ? String(d._id) : d.id,

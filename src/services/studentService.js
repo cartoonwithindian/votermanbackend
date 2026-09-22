@@ -5,6 +5,7 @@
 
 const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 /**
@@ -43,14 +44,11 @@ class StudentService {
 
   async findAll(options = {}) {
     if (isMongoOnly) {
-      const { MongoClient } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-      await client.connect();
+      const client = await getSharedClient();
       const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       const filter = {};
       if (options.activeOnly) filter.isActive = true;
       const rows = await col.find(filter).sort({ _id: 1 }).skip(options.offset || 0).limit(options.limit || 100).toArray();
-      await client.close();
       // Map Mongo docs to Postgres-like shape for sanitize
       return sanitizeStudents(rows.map(r => ({
         id: r._id || r.postgresId,
@@ -99,45 +97,39 @@ class StudentService {
   async findById(id) {
     if (isMongoOnly) {
       try {
-        const { MongoClient, ObjectId } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
-            let doc = null;
-            try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
-            if (!doc) doc = await col.findOne({ $or: [{ postgresId: parseInt(id) }, { id: String(id) }, { _id: String(id) }] });
-            if (!doc) {
-              // Try scan
-              const rows = await col.find({}).limit(200).toArray();
-              doc = rows.find(r => String(r._id) === String(id) || String(r.postgresId) === String(id)) || null;
-            }
-            if (!doc) return null;
-            return sanitizeStudent({
-              id: doc._id || doc.postgresId || doc.id,
-              student_id: doc.studentId || doc.student_id || null,
-              external_id: doc.externalId || doc.external_id || null,
-              name: doc.name,
-              email: doc.email,
-              role: doc.role || 'STUDENT',
-              department: doc.department,
-              year_or_semester: doc.year || doc.year_or_semester || doc.yearOrSemester,
-              section: doc.section,
-              is_active: doc.isActive ?? doc.is_active ?? true,
-              voting_eligible: doc.votingEligible ?? doc.voting_eligible ?? false,
-              password_hash: doc.passwordHash || doc.password_hash,
-              mfa_enabled: doc.mfaEnabled ?? doc.mfa_enabled ?? false,
-              roll_number: doc.rollNumber || doc.roll_number || null,
-              mobile_number: doc.mobileNumber || doc.mobile_number || null,
-              profile_image_url: doc.profileImageUrl || doc.profile_image_url || null,
-              created_at: doc.createdAt || doc.created_at,
-              updated_at: doc.updatedAt || doc.updated_at,
-            });
-          } finally {
-            await client.close().catch(() => {});
+        const client = await getSharedClient();
+        if (client) {
+          const { ObjectId } = require('mongodb');
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+          let doc = null;
+          try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
+          if (!doc) doc = await col.findOne({ $or: [{ postgresId: parseInt(id) }, { id: String(id) }, { _id: String(id) }] });
+          if (!doc) {
+            // Try scan
+            const rows = await col.find({}).limit(200).toArray();
+            doc = rows.find(r => String(r._id) === String(id) || String(r.postgresId) === String(id)) || null;
           }
+          if (!doc) return null;
+          return sanitizeStudent({
+            id: doc._id || doc.postgresId || doc.id,
+            student_id: doc.studentId || doc.student_id || null,
+            external_id: doc.externalId || doc.external_id || null,
+            name: doc.name,
+            email: doc.email,
+            role: doc.role || 'STUDENT',
+            department: doc.department,
+            year_or_semester: doc.year || doc.year_or_semester || doc.yearOrSemester,
+            section: doc.section,
+            is_active: doc.isActive ?? doc.is_active ?? true,
+            voting_eligible: doc.votingEligible ?? doc.voting_eligible ?? false,
+            password_hash: doc.passwordHash || doc.password_hash,
+            mfa_enabled: doc.mfaEnabled ?? doc.mfa_enabled ?? false,
+            roll_number: doc.rollNumber || doc.roll_number || null,
+            mobile_number: doc.mobileNumber || doc.mobile_number || null,
+            profile_image_url: doc.profileImageUrl || doc.profile_image_url || null,
+            created_at: doc.createdAt || doc.created_at,
+            updated_at: doc.updatedAt || doc.updated_at,
+          });
         }
       } catch (e) {
         console.warn('studentService.findById mongo fallback failed:', e.message);
@@ -164,31 +156,24 @@ class StudentService {
   async findByExternalId(externalId) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
-            const doc = await col.findOne({ $or: [{ externalId: externalId }, { external_id: externalId }] });
-            if (!doc) return null;
-            return sanitizeStudent({
-              id: doc._id || doc.postgresId || doc.id,
-              external_id: doc.externalId || doc.external_id,
-              name: doc.name,
-              email: doc.email,
-              role: doc.role,
-              department: doc.department,
-              year_or_semester: doc.year || doc.year_or_semester,
-              section: doc.section,
-              is_active: doc.isActive ?? doc.is_active ?? true,
-              voting_eligible: doc.votingEligible ?? doc.voting_eligible,
-              password_hash: doc.passwordHash || doc.password_hash,
-            });
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+          const doc = await col.findOne({ $or: [{ externalId: externalId }, { external_id: externalId }] });
+          if (!doc) return null;
+          return sanitizeStudent({
+            id: doc._id || doc.postgresId || doc.id,
+            external_id: doc.externalId || doc.external_id,
+            name: doc.name,
+            email: doc.email,
+            role: doc.role,
+            department: doc.department,
+            year_or_semester: doc.year || doc.year_or_semester,
+            section: doc.section,
+            is_active: doc.isActive ?? doc.is_active ?? true,
+            voting_eligible: doc.votingEligible ?? doc.voting_eligible,
+            password_hash: doc.passwordHash || doc.password_hash,
+          });
         }
       } catch (e) {
         console.warn('studentService.findByExternalId mongo fallback failed:', e.message);
@@ -208,19 +193,12 @@ class StudentService {
   async create(data) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
-            const doc = { externalId: data.external_id, external_id: data.external_id, name: data.name, email: data.email, role: 'STUDENT', isActive: true, is_active: true, createdAt: new Date(), created_at: new Date() };
-            const res = await col.insertOne(doc);
-            return sanitizeStudent({ id: res.insertedId, external_id: data.external_id, name: data.name, email: data.email, role: 'STUDENT', is_active: true, voting_eligible: false });
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+          const doc = { externalId: data.external_id, external_id: data.external_id, name: data.name, email: data.email, role: 'STUDENT', isActive: true, is_active: true, createdAt: new Date(), created_at: new Date() };
+          const res = await col.insertOne(doc);
+          return sanitizeStudent({ id: res.insertedId, external_id: data.external_id, name: data.name, email: data.email, role: 'STUDENT', is_active: true, voting_eligible: false });
         }
       } catch (e) {
         console.warn('studentService.create mongo fallback failed:', e.message);
@@ -248,37 +226,31 @@ class StudentService {
       try {
         const existing = await this.findById(id);
         if (!existing) return null;
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (!uri) {
+        const client = await getSharedClient();
+        if (!client) {
           // Mock update
           return sanitizeStudent({ ...existing, ...data, updated_at: new Date().toISOString() });
         }
-        const { MongoClient, ObjectId } = require('mongodb');
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
-        try {
-          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
-          const updates = {};
-          if (data.name !== undefined) updates.name = data.name;
-          if (data.email !== undefined) updates.email = data.email;
-          if (data.voting_eligible !== undefined) { updates.votingEligible = data.voting_eligible; updates.voting_eligible = data.voting_eligible; }
-          if (data.role !== undefined) updates.role = data.role;
-          if (data.department !== undefined) updates.department = data.department;
-          if (data.year_or_semester !== undefined) { updates.year = data.year_or_semester; updates.year_or_semester = data.year_or_semester; }
-          if (data.section !== undefined) updates.section = data.section;
-          updates.updatedAt = new Date(); updates.updated_at = new Date();
-          let res = null;
-          try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
-          if (!res || !res.value) res = await col.findOneAndUpdate({ postgresId: parseInt(id) }, { $set: updates }, { returnDocument: 'after' });
-          if (!res || !res.value) res = await col.findOneAndUpdate({ id: String(id) }, { $set: updates }, { returnDocument: 'after' });
-          if (res && res.value) {
-            const d = res.value;
-            return sanitizeStudent({ id: d._id || d.postgresId, name: d.name, email: d.email, role: d.role, department: d.department, year_or_semester: d.year || d.year_or_semester, section: d.section, is_active: d.isActive ?? d.is_active, voting_eligible: d.votingEligible ?? d.voting_eligible, profile_image_url: d.profileImageUrl || d.profile_image_url });
-          }
-          return sanitizeStudent({ ...existing, ...data });
-        } finally {
-          await client.close().catch(() => {});
+        const { ObjectId } = require('mongodb');
+        const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+        const updates = {};
+        if (data.name !== undefined) updates.name = data.name;
+        if (data.email !== undefined) updates.email = data.email;
+        if (data.voting_eligible !== undefined) { updates.votingEligible = data.voting_eligible; updates.voting_eligible = data.voting_eligible; }
+        if (data.role !== undefined) updates.role = data.role;
+        if (data.department !== undefined) updates.department = data.department;
+        if (data.year_or_semester !== undefined) { updates.year = data.year_or_semester; updates.year_or_semester = data.year_or_semester; }
+        if (data.section !== undefined) updates.section = data.section;
+        updates.updatedAt = new Date(); updates.updated_at = new Date();
+        let res = null;
+        try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
+        if (!res || !res.value) res = await col.findOneAndUpdate({ postgresId: parseInt(id) }, { $set: updates }, { returnDocument: 'after' });
+        if (!res || !res.value) res = await col.findOneAndUpdate({ id: String(id) }, { $set: updates }, { returnDocument: 'after' });
+        if (res && res.value) {
+          const d = res.value;
+          return sanitizeStudent({ id: d._id || d.postgresId, name: d.name, email: d.email, role: d.role, department: d.department, year_or_semester: d.year || d.year_or_semester, section: d.section, is_active: d.isActive ?? d.is_active, voting_eligible: d.votingEligible ?? d.voting_eligible, profile_image_url: d.profileImageUrl || d.profile_image_url });
         }
+        return sanitizeStudent({ ...existing, ...data });
       } catch (e) {
         console.warn('studentService.update mongo fallback failed:', e.message);
         const existing = await this.findById(id).catch(() => null);
@@ -389,13 +361,10 @@ class StudentService {
         if (data.phone !== undefined) updates.mobile_number = data.phone ? String(data.phone).trim() : null;
         if (data.profile_image_url !== undefined) updates.profile_image_url = data.profile_image_url ? String(data.profile_image_url).trim() : null;
         if (Object.keys(updates).length === 0) return existing;
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (!uri) return sanitizeStudent({ ...existing, ...updates });
-        const { MongoClient, ObjectId } = require('mongodb');
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
-        try {
-          const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+        const client = await getSharedClient();
+        if (!client) return sanitizeStudent({ ...existing, ...updates });
+        const { ObjectId } = require('mongodb');
+        const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
           const mongoUpdates = {};
           if (updates.name) mongoUpdates.name = updates.name;
           if (updates.mobile_number !== undefined) { mongoUpdates.mobileNumber = updates.mobile_number; mongoUpdates.mobile_number = updates.mobile_number; }
@@ -409,9 +378,6 @@ class StudentService {
             return sanitizeStudent({ id: d._id || d.postgresId, name: d.name, email: d.email, role: d.role, department: d.department, year_or_semester: d.year || d.year_or_semester, section: d.section, is_active: d.isActive ?? d.is_active, voting_eligible: d.votingEligible ?? d.voting_eligible, mobile_number: d.mobileNumber || d.mobile_number, profile_image_url: d.profileImageUrl || d.profile_image_url });
           }
           return sanitizeStudent({ ...existing, ...updates });
-        } finally {
-          await client.close().catch(() => {});
-        }
       } catch (e) {
         console.warn('studentService.updateOwnProfile mongo fallback failed:', e.message);
         const existing = await this.findById(id).catch(() => null);

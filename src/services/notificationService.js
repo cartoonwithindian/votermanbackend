@@ -5,6 +5,7 @@
 
 const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class NotificationService {
@@ -14,19 +15,12 @@ class NotificationService {
   async create({ userId, type = 'info', category = 'system', priority = 'normal', title, message, actionUrl = null, actionLabel = null }) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('notifications');
-            const doc = { user_id: userId, userId, type, category, priority, title, message, action_url: actionUrl, actionUrl, action_label: actionLabel, actionLabel, is_read: false, isRead: false, created_at: new Date(), createdAt: new Date() };
-            const res = await col.insertOne(doc);
-            return { id: res.insertedId, user_id: userId, type, category, priority, title, message, action_url: actionUrl, action_label: actionLabel, is_read: false, created_at: doc.created_at };
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('notifications');
+          const doc = { user_id: userId, userId, type, category, priority, title, message, action_url: actionUrl, actionUrl, action_label: actionLabel, actionLabel, is_read: false, isRead: false, created_at: new Date(), createdAt: new Date() };
+          const res = await col.insertOne(doc);
+          return { id: res.insertedId, user_id: userId, type, category, priority, title, message, action_url: actionUrl, action_label: actionLabel, is_read: false, created_at: doc.created_at };
         }
       } catch (e) {
         console.warn('notificationService.create mongo fallback failed:', e.message);
@@ -54,19 +48,12 @@ class NotificationService {
     const uniqueIds = [...new Set(userIds)];
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('notifications');
-            const docs = uniqueIds.map(uid => ({ user_id: uid, userId: uid, type, category, priority, title, message, action_url: actionUrl, actionUrl, action_label: actionLabel, actionLabel, is_read: false, isRead: false, created_at: new Date(), createdAt: new Date() }));
-            if (docs.length) await col.insertMany(docs);
-            return uniqueIds.length;
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('notifications');
+          const docs = uniqueIds.map(uid => ({ user_id: uid, userId: uid, type, category, priority, title, message, action_url: actionUrl, actionUrl, action_label: actionLabel, actionLabel, is_read: false, isRead: false, created_at: new Date(), createdAt: new Date() }));
+          if (docs.length) await col.insertMany(docs);
+          return uniqueIds.length;
         }
       } catch (e) {
         console.warn('notificationService.createBulk mongo fallback failed:', e.message);
@@ -132,21 +119,15 @@ class NotificationService {
   async findById(id, userId) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('notifications');
-            let doc = null;
-            try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
-            if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
-            if (!doc) return null;
-            return { id: doc._id ? String(doc._id) : doc.id, user_id: doc.user_id ?? doc.userId, type: doc.type, category: doc.category, priority: doc.priority, title: doc.title, message: doc.message, action_url: doc.action_url ?? doc.actionUrl, action_label: doc.action_label ?? doc.actionLabel, is_read: doc.is_read ?? doc.isRead ?? false, created_at: doc.created_at ?? doc.createdAt };
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const { ObjectId } = require('mongodb');
+          const col = client.db(getMongoDbName()).collection('notifications');
+          let doc = null;
+          try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
+          if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
+          if (!doc) return null;
+          return { id: doc._id ? String(doc._id) : doc.id, user_id: doc.user_id ?? doc.userId, type: doc.type, category: doc.category, priority: doc.priority, title: doc.title, message: doc.message, action_url: doc.action_url ?? doc.actionUrl, action_label: doc.action_label ?? doc.actionLabel, is_read: doc.is_read ?? doc.isRead ?? false, created_at: doc.created_at ?? doc.createdAt };
         }
       } catch (e) {
         console.warn('notificationService.findById mongo fallback failed:', e.message);
@@ -166,22 +147,16 @@ class NotificationService {
   async markAsRead(id, userId) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('notifications');
-            let res = null;
-            try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)), $or: [{ user_id: userId }, { userId }] }, { $set: { is_read: true, isRead: true, read_at: new Date(), readAt: new Date() } }, { returnDocument: 'after' }); } catch (_) {}
-            if (!res || !res.value) res = await col.findOneAndUpdate({ $or: [{ id: String(id) }, { _id: String(id) }] }, { $set: { is_read: true, isRead: true, read_at: new Date(), readAt: new Date() } }, { returnDocument: 'after' });
-            if (res && res.value) {
-              const d = res.value;
-              return { id: d._id ? String(d._id) : d.id, user_id: d.user_id ?? d.userId, is_read: true, read_at: d.read_at ?? d.readAt };
-            }
-          } finally {
-            await client.close().catch(() => {});
+        const client = await getSharedClient();
+        if (client) {
+          const { ObjectId } = require('mongodb');
+          const col = client.db(getMongoDbName()).collection('notifications');
+          let res = null;
+          try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)), $or: [{ user_id: userId }, { userId }] }, { $set: { is_read: true, isRead: true, read_at: new Date(), readAt: new Date() } }, { returnDocument: 'after' }); } catch (_) {}
+          if (!res || !res.value) res = await col.findOneAndUpdate({ $or: [{ id: String(id) }, { _id: String(id) }] }, { $set: { is_read: true, isRead: true, read_at: new Date(), readAt: new Date() } }, { returnDocument: 'after' });
+          if (res && res.value) {
+            const d = res.value;
+            return { id: d._id ? String(d._id) : d.id, user_id: d.user_id ?? d.userId, is_read: true, read_at: d.read_at ?? d.readAt };
           }
         }
       } catch (e) {
@@ -204,17 +179,10 @@ class NotificationService {
   async markAllAsRead(userId) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('notifications');
-            await col.updateMany({ $or: [{ user_id: userId }, { userId }], is_read: false }, { $set: { is_read: true, isRead: true, read_at: new Date(), readAt: new Date() } });
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('notifications');
+          await col.updateMany({ $or: [{ user_id: userId }, { userId }], is_read: false }, { $set: { is_read: true, isRead: true, read_at: new Date(), readAt: new Date() } });
         }
       } catch (e) {
         console.warn('notificationService.markAllAsRead mongo fallback failed:', e.message);

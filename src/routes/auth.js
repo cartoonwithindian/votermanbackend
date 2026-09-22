@@ -22,7 +22,7 @@ const { sendLoginOtp, sendPasswordResetOtp } = require('../services/brevoService
 const { recordAudit, findStudentByIdentifierOrEmail, publicUser, isLocked, incrementFailedLogin, updateStudentLogin } = require('../lib/authDb');
 const { verifyClerkSessionRequest, requireClerkMiddleware } = require('../lib/clerkVerify');
 const { incLoginAttempt, incFailedLogin } = require('../monitoring/metrics');
-const { getMongoDbName } = require('../utils/mongoDbName');
+const { getDb: getSharedDb } = require('../db/mongoClient');
 
 // Helper for consistent error responses
 function authError(res, status, code, message) {
@@ -438,10 +438,8 @@ router.post('/admin-portal-login', loginLimiter, csrfProtection, async (req, res
     const isMongoOnly = !process.env.DATABASE_URL && !!process.env.MONGODB_URI;
     let account = null;
     if (isMongoOnly) {
-      const { MongoClient } = require('mongodb');
-      const mclient = new MongoClient(process.env.MONGODB_URI);
-      await mclient.connect();
-      const mdb = mclient.db(getMongoDbName());
+      const mdb = await getSharedDb();
+      if (!mdb) throw new Error('MongoDB not configured');
       account = await mdb.collection('students').findOne({
         $or: [
           { email: { $regex: `^${normalizedEmail}$`, $options: 'i' } },
@@ -449,7 +447,6 @@ router.post('/admin-portal-login', loginLimiter, csrfProtection, async (req, res
           { officialEmail: { $regex: `^${normalizedEmail}$`, $options: 'i' } },
         ],
       });
-      await mclient.close();
     } else {
       account = await db.query(
         `SELECT * FROM students
@@ -469,10 +466,8 @@ router.post('/admin-portal-login', loginLimiter, csrfProtection, async (req, res
       const randomPassword = require('node:crypto').randomBytes(24).toString('base64url');
       const passwordHash = await hashPassword(randomPassword);
       if (isMongoOnly) {
-        const { MongoClient } = require('mongodb');
-        const mclient = new MongoClient(process.env.MONGODB_URI);
-        await mclient.connect();
-        const mdb = mclient.db(getMongoDbName());
+        const mdb = await getSharedDb();
+        if (!mdb) throw new Error('MongoDB not configured');
         const newId = Date.now();
         const doc = {
           _id: newId,
@@ -491,7 +486,6 @@ router.post('/admin-portal-login', loginLimiter, csrfProtection, async (req, res
           updatedAt: new Date(),
         };
         await mdb.collection('students').insertOne(doc);
-        await mclient.close();
         student = { id: doc._id, external_id: doc.externalId, name: doc.name, email: doc.email, role: doc.role, is_active: true };
         console.log('admin-portal-login: provisioned admin (mongo)', { email: normalizedEmail });
       } else {
@@ -508,12 +502,9 @@ router.post('/admin-portal-login', loginLimiter, csrfProtection, async (req, res
     } else {
       // Make sure the listed admin is active and promoted to ADMIN.
       if (isMongoOnly) {
-        const { MongoClient } = require('mongodb');
-        const mclient = new MongoClient(process.env.MONGODB_URI);
-        await mclient.connect();
-        const mdb = mclient.db(getMongoDbName());
+        const mdb = await getSharedDb();
+        if (!mdb) throw new Error('MongoDB not configured');
         await mdb.collection('students').updateOne({ _id: account._id || account.postgresId || account.id }, { $set: { role: 'ADMIN', isActive: true } });
-        await mclient.close();
         student = { id: account._id || account.postgresId || account.id, external_id: account.externalId, name: account.name, email: account.email, role: 'ADMIN', is_active: true };
       } else {
         const updated = await db.query(

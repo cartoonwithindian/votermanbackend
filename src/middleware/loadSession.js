@@ -13,7 +13,7 @@ const db = require('../db');
 const { hashToken } = require('../lib/crypto');
 const { SESSION_COOKIE } = require('../lib/cookies');
 const { normalizeYear } = require('../utils/yearNormalizer');
-const { getMongoDbName } = require('../utils/mongoDbName');
+const { getDb: getSharedDb } = require('../db/mongoClient');
 const isMongoOnly = !process.env.DATABASE_URL && !!process.env.MONGODB_URI;
 
 /**
@@ -67,20 +67,17 @@ async function loadSession(req, res, next) {
   try {
     // Mongo-only (Atlas M10) — sessions + students in Atlas
     if (isMongoOnly) {
-      const { MongoClient } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI);
-      await client.connect();
-      const dbMongo = client.db(getMongoDbName());
+      const dbMongo = await getSharedDb();
+      if (!dbMongo) return next();
       const hashedSession = hashToken(sessionId);
       const sess = await dbMongo.collection('sessions').findOne({ sessionHash: hashedSession, revokedAt: null, expiresAt: { $gt: new Date() } });
-      if (!sess) { await client.close(); return next(); }
+      if (!sess) return next();
       if (isStateChanging) {
-        if (!binding || !sameToken(sess.bindingHash, hashToken(binding))) { await client.close(); return next(); }
+        if (!binding || !sameToken(sess.bindingHash, hashToken(binding))) return next();
       }
       const st = await dbMongo.collection('students').findOne({ _id: sess.studentId });
       // Fallback to Postgres id as _id or postgresId
       const studentDoc = st || await dbMongo.collection('students').findOne({ postgresId: sess.studentId });
-      await client.close();
       if (!studentDoc || !studentDoc.isActive) {
         if (!studentDoc) return next();
         return res.status(403).json({ error: 'Forbidden', message: 'Account is deactivated.', code: 'ACCOUNT_DEACTIVATED' });

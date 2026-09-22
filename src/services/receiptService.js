@@ -6,6 +6,7 @@
 const crypto = require('crypto');
 const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class ReceiptService {
@@ -54,21 +55,15 @@ class ReceiptService {
       // In Mongo-only, receipt ids may be ObjectId not UUID — try Mongo lookup anyway
       if (isMongoOnly) {
         try {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-          if (uri) {
-            const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-            await client.connect();
-            try {
-              const col = client.db(getMongoDbName()).collection('vote_receipts');
-              let doc = null;
-              try { if (ObjectId.isValid(String(receiptId))) doc = await col.findOne({ _id: new ObjectId(String(receiptId)) }); } catch (_) {}
-              if (!doc) doc = await col.findOne({ $or: [{ _id: String(receiptId) }, { id: String(receiptId) }] });
-              if (!doc) return { valid: false, error: 'Receipt not found' };
-              return { valid: true, receipt: { id: doc._id ? String(doc._id) : doc.id, receiptHash: doc.receipt_hash ?? doc.receiptHash, createdAt: doc.created_at ?? doc.createdAt, electionName: doc.election_name ?? doc.electionName ?? 'Election', electionStatus: doc.election_status ?? doc.electionStatus ?? 'OPEN' } };
-            } finally {
-              await client.close().catch(() => {});
-            }
+          const client = await getSharedClient();
+          if (client) {
+            const { ObjectId } = require('mongodb');
+            const col = client.db(getMongoDbName()).collection('vote_receipts');
+            let doc = null;
+            try { if (ObjectId.isValid(String(receiptId))) doc = await col.findOne({ _id: new ObjectId(String(receiptId)) }); } catch (_) {}
+            if (!doc) doc = await col.findOne({ $or: [{ _id: String(receiptId) }, { id: String(receiptId) }] });
+            if (!doc) return { valid: false, error: 'Receipt not found' };
+            return { valid: true, receipt: { id: doc._id ? String(doc._id) : doc.id, receiptHash: doc.receipt_hash ?? doc.receiptHash, createdAt: doc.created_at ?? doc.createdAt, electionName: doc.election_name ?? doc.electionName ?? 'Election', electionStatus: doc.election_status ?? doc.electionStatus ?? 'OPEN' } };
           }
         } catch (e) {
           console.warn('[receiptService] verifyReceipt mongo fallback failed:', e.message);
@@ -79,34 +74,28 @@ class ReceiptService {
 
     if (isMongoOnly) {
       try {
-        const { MongoClient, ObjectId } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
+        const client = await getSharedClient();
+        if (client) {
+          const { ObjectId } = require('mongodb');
+          const col = client.db(getMongoDbName()).collection('vote_receipts');
+          let doc = null;
+          try { if (ObjectId.isValid(String(receiptId))) doc = await col.findOne({ _id: new ObjectId(String(receiptId)) }); } catch (_) {}
+          if (!doc) doc = await col.findOne({ $or: [{ id: String(receiptId) }, { _id: String(receiptId) }] });
+          if (!doc) return { valid: false, error: 'Receipt not found' };
+          // Try to enrich election name/status from elections collection
+          let electionName = doc.election_name ?? doc.electionName ?? 'Election';
+          let electionStatus = doc.election_status ?? doc.electionStatus ?? 'OPEN';
           try {
-            const col = client.db(getMongoDbName()).collection('vote_receipts');
-            let doc = null;
-            try { if (ObjectId.isValid(String(receiptId))) doc = await col.findOne({ _id: new ObjectId(String(receiptId)) }); } catch (_) {}
-            if (!doc) doc = await col.findOne({ $or: [{ id: String(receiptId) }, { _id: String(receiptId) }] });
-            if (!doc) return { valid: false, error: 'Receipt not found' };
-            // Try to enrich election name/status from elections collection
-            let electionName = doc.election_name ?? doc.electionName ?? 'Election';
-            let electionStatus = doc.election_status ?? doc.electionStatus ?? 'OPEN';
-            try {
-              const eCol = client.db(getMongoDbName()).collection('elections');
-              const eId = doc.election_id ?? doc.electionId;
-              if (eId) {
-                let eDoc = null;
-                try { if (ObjectId.isValid(String(eId))) eDoc = await eCol.findOne({ _id: new ObjectId(String(eId)) }); } catch (_) {}
-                if (!eDoc) eDoc = await eCol.findOne({ $or: [{ postgresId: parseInt(eId) }, { id: parseInt(eId) }] });
-                if (eDoc) { electionName = eDoc.name || electionName; electionStatus = eDoc.status || electionStatus; }
-              }
-            } catch (_) {}
-            return { valid: true, receipt: { id: doc._id ? String(doc._id) : doc.id, receiptHash: doc.receipt_hash ?? doc.receiptHash, createdAt: doc.created_at ?? doc.createdAt, electionName, electionStatus } };
-          } finally {
-            await client.close().catch(() => {});
-          }
+            const eCol = client.db(getMongoDbName()).collection('elections');
+            const eId = doc.election_id ?? doc.electionId;
+            if (eId) {
+              let eDoc = null;
+              try { if (ObjectId.isValid(String(eId))) eDoc = await eCol.findOne({ _id: new ObjectId(String(eId)) }); } catch (_) {}
+              if (!eDoc) eDoc = await eCol.findOne({ $or: [{ postgresId: parseInt(eId) }, { id: parseInt(eId) }] });
+              if (eDoc) { electionName = eDoc.name || electionName; electionStatus = eDoc.status || electionStatus; }
+            }
+          } catch (_) {}
+          return { valid: true, receipt: { id: doc._id ? String(doc._id) : doc.id, receiptHash: doc.receipt_hash ?? doc.receiptHash, createdAt: doc.created_at ?? doc.createdAt, electionName, electionStatus } };
         }
       } catch (e) {
         console.warn('[receiptService] verifyReceipt mongo fallback failed:', e.message);
@@ -210,46 +199,39 @@ class ReceiptService {
   async getFullReceiptDetails(studentId, electionId) {
     if (isMongoOnly) {
       try {
-        const { MongoClient } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
+        const client = await getSharedClient();
+        if (client) {
+          const dbName = getMongoDbName();
+          const vrCol = client.db(dbName).collection('vote_receipts');
+          const doc = await vrCol.findOne({ $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] });
+          if (!doc) return null;
+          let electionName = doc.election_name ?? doc.electionName ?? 'Election';
+          let electionStatus = doc.election_status ?? doc.electionStatus ?? 'OPEN';
           try {
-            const dbName = getMongoDbName();
-            const vrCol = client.db(dbName).collection('vote_receipts');
-            const doc = await vrCol.findOne({ $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] });
-            if (!doc) return null;
-            let electionName = doc.election_name ?? doc.electionName ?? 'Election';
-            let electionStatus = doc.election_status ?? doc.electionStatus ?? 'OPEN';
-            try {
-              const eCol = client.db(dbName).collection('elections');
-              const eId = doc.election_id ?? doc.electionId;
-              if (eId) {
-                const { ObjectId } = require('mongodb');
-                let eDoc = null;
-                try { if (ObjectId.isValid(String(eId))) eDoc = await eCol.findOne({ _id: new ObjectId(String(eId)) }); } catch (_) {}
-                if (!eDoc) eDoc = await eCol.findOne({ $or: [{ postgresId: parseInt(eId) }, { id: parseInt(eId) }] });
-                if (eDoc) { electionName = eDoc.name || electionName; electionStatus = eDoc.status || electionStatus; }
-              }
-            } catch (_) {}
-            return {
-              receiptId: doc._id ? String(doc._id) : doc.id,
-              receiptHash: doc.receipt_hash ?? doc.receiptHash,
-              nullifier: doc.nullifier,
-              createdAt: doc.created_at ?? doc.createdAt,
-              electionId: doc.election_id ?? doc.electionId,
-              electionName,
-              electionStatus,
-              voteId: doc.vote_id ?? doc.voteId,
-              studentId: doc.student_id ?? doc.studentId,
-              studentName: doc.student_name ?? doc.studentName ?? '',
-              positionName: doc.position_name ?? doc.positionName ?? '',
-              candidateName: doc.candidate_name ?? doc.candidateName ?? '',
-            };
-          } finally {
-            await client.close().catch(() => {});
-          }
+            const eCol = client.db(dbName).collection('elections');
+            const eId = doc.election_id ?? doc.electionId;
+            if (eId) {
+              const { ObjectId } = require('mongodb');
+              let eDoc = null;
+              try { if (ObjectId.isValid(String(eId))) eDoc = await eCol.findOne({ _id: new ObjectId(String(eId)) }); } catch (_) {}
+              if (!eDoc) eDoc = await eCol.findOne({ $or: [{ postgresId: parseInt(eId) }, { id: parseInt(eId) }] });
+              if (eDoc) { electionName = eDoc.name || electionName; electionStatus = eDoc.status || electionStatus; }
+            }
+          } catch (_) {}
+          return {
+            receiptId: doc._id ? String(doc._id) : doc.id,
+            receiptHash: doc.receipt_hash ?? doc.receiptHash,
+            nullifier: doc.nullifier,
+            createdAt: doc.created_at ?? doc.createdAt,
+            electionId: doc.election_id ?? doc.electionId,
+            electionName,
+            electionStatus,
+            voteId: doc.vote_id ?? doc.voteId,
+            studentId: doc.student_id ?? doc.studentId,
+            studentName: doc.student_name ?? doc.studentName ?? '',
+            positionName: doc.position_name ?? doc.positionName ?? '',
+            candidateName: doc.candidate_name ?? doc.candidateName ?? '',
+          };
         }
       } catch (e) {
         console.warn('[receiptService] getFullReceiptDetails mongo fallback to null:', e.message);

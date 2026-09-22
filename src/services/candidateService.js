@@ -12,6 +12,7 @@ const jsonStore = require('./jsonCandidateStore');
 const mongoStore = require('./mongoCandidateStore');
 const { normalizeYear } = require('../utils/yearNormalizer');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getDb: getSharedDb } = require('../db/mongoClient');
 const redisCache = require('../utils/redisCache');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
@@ -29,13 +30,10 @@ class CandidateService {
     if (!rows || !rows.length) return rows;
     const missing = rows.some(r => !(r.position_name || r.position));
     if (!missing) return rows;
-    const { MongoClient } = require('mongodb');
-    const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-    if (!uri) return rows;
-    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+    const db = await getSharedDb();
+    if (!db) return rows;
     try {
-      await client.connect();
-      const positions = await client.db(getMongoDbName()).collection('positions').find({}).toArray();
+      const positions = await db.collection('positions').find({}).toArray();
       const byId = new Map();
       for (const p of positions) {
         byId.set(String(p._id), p);
@@ -50,8 +48,6 @@ class CandidateService {
     } catch (e) {
       console.warn('[candidateService] enrichPositionNames failed:', e.message);
       return rows;
-    } finally {
-      await client.close().catch(() => {});
     }
   }
 
@@ -64,18 +60,13 @@ class CandidateService {
   async filterOpenElectionRows(rows) {
     if (!rows || !rows.length) return rows;
     try {
-      const { MongoClient } = require('mongodb');
-      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-      if (!uri) return rows;
-      const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-      try {
-        await client.connect();
-        const dbc = client.db(getMongoDbName());
-        const [positionDocs, constituentDocs, electionDocs] = await Promise.all([
-          dbc.collection('positions').find({}).toArray(),
-          dbc.collection('constituencies').find({}).toArray(),
-          dbc.collection('elections').find({}).toArray(),
-        ]);
+      const dbc = await getSharedDb();
+      if (!dbc) return rows;
+      const [positionDocs, constituentDocs, electionDocs] = await Promise.all([
+        dbc.collection('positions').find({}).toArray(),
+        dbc.collection('constituencies').find({}).toArray(),
+        dbc.collection('elections').find({}).toArray(),
+      ]);
         const positionById = new Map();
         for (const p of positionDocs) {
           positionById.set(String(p._id), p);
@@ -99,9 +90,6 @@ class CandidateService {
           if (!ct) return false;
           return open.includes(electionStatus.get(String(ct.election_id ?? ct.electionId ?? '')) || '');
         });
-      } finally {
-        await client.close().catch(() => {});
-      }
     } catch (e) {
       console.warn('[candidateService] filterOpenElectionRows failed, keeping rows:', e.message);
       return rows;
@@ -488,11 +476,8 @@ class CandidateService {
     if (isMongoOnly) {
       // Mongo-only: read from Mongo candidates (real voteable rows take precedence)
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
+        const dbc = await getSharedDb();
+        if (dbc) {
           try {
             let docs = null;
             if (await mongoStore.hasMongoCandidates()) {
@@ -500,14 +485,14 @@ class CandidateService {
               if (rows && rows.length) docs = rows.filter(r => String(r.position_id ?? r.positionId) === String(positionId));
             }
             if (!docs || !docs.length) {
-              const col = client.db(getMongoDbName()).collection('candidates');
+              const col = dbc.collection('candidates');
               docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }] }).limit(options.limit || 100).skip(options.offset || 0).toArray();
             }
             if (docs && docs.length) {
               return docs.map(d => ({ id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true }));
             }
-          } finally {
-            await client.close().catch(() => {});
+          } catch (e) {
+            console.warn('[candidateService] findByPositionId mongo fallback to []:', e.message);
           }
         }
       } catch (e) {
@@ -540,20 +525,18 @@ class CandidateService {
   async findByIdSimple(id) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
+        const dbc = await getSharedDb();
+        if (dbc) {
           try {
-            const col = client.db(getMongoDbName()).collection('candidates');
+            const { ObjectId } = require('mongodb');
+            const col = dbc.collection('candidates');
             let doc = null;
             try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
             if (!doc) return null;
             return { id: doc._id ? String(doc._id) : doc.id, position_id: doc.position_id ?? doc.positionId, name: doc.name, description: doc.description, image_url: doc.image_url ?? doc.imageUrl, display_order: doc.display_order ?? doc.displayOrder ?? 0, is_active: doc.is_active ?? doc.isActive ?? true };
-          } finally {
-            await client.close().catch(() => {});
+          } catch (e) {
+            console.warn('[candidateService] findByIdSimple mongo fallback to null:', e.message);
           }
         }
       } catch (e) {
@@ -571,13 +554,11 @@ class CandidateService {
   async deleteById(id) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
+        const dbc = await getSharedDb();
+        if (dbc) {
           try {
-            const col = client.db(getMongoDbName()).collection('candidates');
+            const { ObjectId } = require('mongodb');
+            const col = dbc.collection('candidates');
             let res = null;
             try { if (ObjectId.isValid(String(id))) res = await col.findOneAndDelete({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!res || !res.value) res = await col.findOneAndDelete({ $or: [{ id: String(id) }, { _id: String(id) }] });
@@ -585,8 +566,8 @@ class CandidateService {
             const d = res.value;
             await this.invalidateCandidates();
             return { id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, department: d.department ?? null, year: d.year ?? null, section: d.section ?? null, gender: d.gender ?? null, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true };
-          } finally {
-            await client.close().catch(() => {});
+          } catch (e) {
+            console.warn('[candidateService] deleteById mongo fallback null:', e.message);
           }
         }
       } catch (e) {
@@ -647,17 +628,14 @@ class CandidateService {
     if (!target) return false;
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
+        const dbc = await getSharedDb();
+        if (dbc) {
           try {
-            const col = client.db(getMongoDbName()).collection('candidates');
+            const col = dbc.collection('candidates');
             const docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }] }).toArray();
             return docs.some(d => String(d.name || '').trim().toLowerCase() === target);
-          } finally {
-            await client.close().catch(() => {});
+          } catch (e) {
+            console.warn('[candidateService] candidateExists mongo fallback false:', e.message);
           }
         }
       } catch (e) {
@@ -680,19 +658,16 @@ class CandidateService {
   async create({ position_id, name, description = null, image_url = null, department = null, year = null, section = null, gender = null, manifest = null }) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
+        const dbc = await getSharedDb();
+        if (dbc) {
           try {
-            const col = client.db(getMongoDbName()).collection('candidates');
+            const col = dbc.collection('candidates');
             const doc = { position_id, positionId: position_id, name, description: description ?? manifest, image_url: image_url, imageUrl: image_url, department: department ?? null, year: year ?? null, section: section ?? null, gender: gender ?? null, display_order: 1, displayOrder: 1, is_active: true, isActive: true, created_at: new Date(), createdAt: new Date() };
             const res = await col.insertOne(doc);
             await this.invalidateCandidates();
             return { id: String(res.insertedId), position_id, name, description: description ?? manifest, image_url, department, year, section, gender, display_order: 1, is_active: true };
-          } finally {
-            await client.close().catch(() => {});
+          } catch (e) {
+            console.warn('[candidateService] create mongo fallback mock:', e.message);
           }
         }
       } catch (e) {
@@ -727,13 +702,11 @@ class CandidateService {
         if (data.display_order !== undefined) merged.display_order = data.display_order;
         merged.updated_at = new Date().toISOString();
         // Try Mongo update if available
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
+        const dbc = await getSharedDb();
+        if (dbc) {
           try {
-            const col = client.db(getMongoDbName()).collection('candidates');
+            const { ObjectId } = require('mongodb');
+            const col = dbc.collection('candidates');
             const upd = {};
             if (data.name !== undefined) upd.name = data.name;
             if (data.description !== undefined) upd.description = data.description;
@@ -752,8 +725,8 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
               await this.invalidateCandidates();
               return { id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0 };
             }
-          } finally {
-            await client.close().catch(() => {});
+          } catch (e) {
+            console.warn('[candidateService] update mongo fallback:', e.message);
           }
         }
         return merged;
@@ -786,13 +759,10 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
    * standing. Only supports the Mongo-only deployment.
    */
   async findOwnCandidacy(student) {
-    const { MongoClient } = require('mongodb');
-    const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-    if (!uri || !student || !student.name) return null;
-    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2500, connectTimeoutMS: 2500 });
+    const dbc = await getSharedDb();
+    if (!dbc || !student || !student.name) return null;
     try {
-      await client.connect();
-      const col = client.db(getMongoDbName()).collection('candidates');
+      const col = dbc.collection('candidates');
       const cohort = {
         name: student.name,
         department: student.department || undefined,
@@ -820,8 +790,6 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
     } catch (e) {
       console.warn('[candidateService] findOwnCandidacy failed:', e.message);
       return null;
-    } finally {
-      await client.close().catch(() => {});
     }
   }
 
@@ -832,13 +800,10 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
    * immediately on the student list.
    */
   async updateOwnManifesto(student, manifesto) {
-    const { MongoClient } = require('mongodb');
-    const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-    if (!uri || !student || !student.name) return null;
-    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2500, connectTimeoutMS: 2500 });
+    const dbc = await getSharedDb();
+    if (!dbc || !student || !student.name) return null;
     try {
-      await client.connect();
-      const col = client.db(getMongoDbName()).collection('candidates');
+      const col = dbc.collection('candidates');
       const cohort = {
         name: student.name,
         department: student.department || undefined,
@@ -869,8 +834,6 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
     } catch (e) {
       console.warn('[candidateService] updateOwnManifesto failed:', e.message);
       return null;
-    } finally {
-      await client.close().catch(() => {});
     }
   }
 }

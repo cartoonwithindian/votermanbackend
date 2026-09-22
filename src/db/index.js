@@ -2,6 +2,7 @@ const { Pool } = require('pg');
 const dbConfig = require('../config/database');
 const config = require('../config');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient } = require('./mongoClient');
 
 // Build connection configuration
 const getPoolConfig = () => {
@@ -67,11 +68,9 @@ const healthCheck = async () => {
   if (isMongoOnly) {
     const start = Date.now();
     try {
-      const { MongoClient } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-      await client.connect();
+      const client = await getClient();
+      if (!client) throw new Error('MongoDB not configured');
       await client.db(getMongoDbName()).command({ ping: 1 });
-      await client.close();
       const duration = Date.now() - start;
       return { status: 'ok', responseTime: `${duration}ms`, timestamp: new Date().toISOString(), database: 'mongodb' };
     } catch (e) {

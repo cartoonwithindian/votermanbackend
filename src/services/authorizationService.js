@@ -5,6 +5,7 @@
 
 const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class AuthorizationService {
@@ -106,17 +107,12 @@ class AuthorizationService {
     if (isMongoOnly) {
       // Mongo-only: try Mongo voter_authorizations, otherwise mock to avoid 500
       try {
-        const { MongoClient } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('voter_authorizations');
-            const doc = { student_id: data.student_id, studentId: data.student_id, election_id: data.election_id, electionId: data.election_id, is_authorized: data.is_authorized ?? true, isAuthorized: data.is_authorized ?? true, expires_at: data.expires_at || null, expiresAt: data.expires_at || null, created_at: new Date(), updated_at: new Date() };
-            const res = await col.insertOne(doc);
-            return { id: String(res.insertedId), student_id: doc.student_id, election_id: doc.election_id, is_authorized: doc.is_authorized, expires_at: doc.expires_at, created_at: doc.created_at, updated_at: doc.updated_at };
-          } finally { await client.close().catch(() => {}); }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('voter_authorizations');
+          const doc = { student_id: data.student_id, studentId: data.student_id, election_id: data.election_id, electionId: data.election_id, is_authorized: data.is_authorized ?? true, isAuthorized: data.is_authorized ?? true, expires_at: data.expires_at || null, expiresAt: data.expires_at || null, created_at: new Date(), updated_at: new Date() };
+          const res = await col.insertOne(doc);
+          return { id: String(res.insertedId), student_id: doc.student_id, election_id: doc.election_id, is_authorized: doc.is_authorized, expires_at: doc.expires_at, created_at: doc.created_at, updated_at: doc.updated_at };
         }
       } catch (e) { console.warn('[authorizationService] create mongo fallback:', e.message); }
       // Mock success to avoid 500
@@ -146,25 +142,21 @@ class AuthorizationService {
   async update(id, data) {
     if (isMongoOnly) {
       try {
-        const { MongoClient, ObjectId } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('voter_authorizations');
-            const updates = {};
-            if (data.is_authorized !== undefined) { updates.is_authorized = data.is_authorized; updates.isAuthorized = data.is_authorized; }
-            if (data.expires_at !== undefined) { updates.expires_at = data.expires_at; updates.expiresAt = data.expires_at; }
-            updates.updated_at = new Date(); updates.updatedAt = new Date();
-            let res = null;
-            try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
-            if (!res || !res.value) res = await col.findOneAndUpdate({ $or: [{ id: String(id) }, { _id: String(id) }] }, { $set: updates }, { returnDocument: 'after' });
-            if (res && res.value) {
-              const d = res.value;
-              return { id: d._id ? String(d._id) : d.id, student_id: d.student_id ?? d.studentId, election_id: d.election_id ?? d.electionId, is_authorized: d.is_authorized ?? d.isAuthorized, expires_at: d.expires_at ?? d.expiresAt, updated_at: d.updated_at ?? d.updatedAt };
-            }
-          } finally { await client.close().catch(() => {}); }
+        const client = await getSharedClient();
+        if (client) {
+          const { ObjectId } = require('mongodb');
+          const col = client.db(getMongoDbName()).collection('voter_authorizations');
+          const updates = {};
+          if (data.is_authorized !== undefined) { updates.is_authorized = data.is_authorized; updates.isAuthorized = data.is_authorized; }
+          if (data.expires_at !== undefined) { updates.expires_at = data.expires_at; updates.expiresAt = data.expires_at; }
+          updates.updated_at = new Date(); updates.updatedAt = new Date();
+          let res = null;
+          try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
+          if (!res || !res.value) res = await col.findOneAndUpdate({ $or: [{ id: String(id) }, { _id: String(id) }] }, { $set: updates }, { returnDocument: 'after' });
+          if (res && res.value) {
+            const d = res.value;
+            return { id: d._id ? String(d._id) : d.id, student_id: d.student_id ?? d.studentId, election_id: d.election_id ?? d.electionId, is_authorized: d.is_authorized ?? d.isAuthorized, expires_at: d.expires_at ?? d.expiresAt, updated_at: d.updated_at ?? d.updatedAt };
+          }
         }
       } catch (e) { console.warn('[authorizationService] update mongo fallback:', e.message); }
       // Fallback mock to avoid 500
@@ -218,18 +210,14 @@ class AuthorizationService {
   async delete(id) {
     if (isMongoOnly) {
       try {
-        const { MongoClient, ObjectId } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('voter_authorizations');
-            let res = null;
-            try { if (ObjectId.isValid(String(id))) res = await col.findOneAndDelete({ _id: new ObjectId(String(id)) }); } catch (_) {}
-            if (!res || !res.value) res = await col.findOneAndDelete({ $or: [{ id: String(id) }, { _id: String(id) }] });
-            if (res && res.value) return { id: String(res.value._id || res.value.id) };
-          } finally { await client.close().catch(() => {}); }
+        const client = await getSharedClient();
+        if (client) {
+          const { ObjectId } = require('mongodb');
+          const col = client.db(getMongoDbName()).collection('voter_authorizations');
+          let res = null;
+          try { if (ObjectId.isValid(String(id))) res = await col.findOneAndDelete({ _id: new ObjectId(String(id)) }); } catch (_) {}
+          if (!res || !res.value) res = await col.findOneAndDelete({ $or: [{ id: String(id) }, { _id: String(id) }] });
+          if (res && res.value) return { id: String(res.value._id || res.value.id) };
         }
       } catch (e) { console.warn('[authorizationService] delete mongo fallback:', e.message); }
       // Mock success to avoid 500 — return id as if deleted
@@ -430,13 +418,10 @@ class AuthorizationService {
   async checkEligibility(studentId, electionId) {
     if (isMongoOnly) {
       try {
-        const { MongoClient, ObjectId } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const dbName = getMongoDbName();
+        const client = await getSharedClient();
+        if (client) {
+          const { ObjectId } = require('mongodb');
+          const dbName = getMongoDbName();
             // Check election exists in Mongo
             const eCol = client.db(dbName).collection('elections');
             let election = null;
@@ -473,9 +458,6 @@ class AuthorizationService {
               return { eligible: false, reason: 'NOT_AUTHORIZED', message: 'Authorization expired', student_id: studentId, election_id: electionId };
             }
             return { eligible: true, reason: 'AUTHORIZED', message: 'Student is authorized', student_id: studentId, election_id: electionId, election_status: status, authorized_clubs: [], full_access: true };
-          } finally {
-            await client.close().catch(() => {});
-          }
         }
       } catch (e) {
         console.warn('[authorizationService] checkEligibility mongo fallback failed:', e.message);

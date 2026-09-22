@@ -5,7 +5,12 @@
 
 const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
+const redisCache = require('../utils/redisCache');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
+const ELECTIONS_CACHE_KEY_PREFIX = 'elections:v1:';
+const ELECTIONS_CACHE_TTL = 30;
 
 // Valid status transitions
 const STATUS_TRANSITIONS = {
@@ -26,16 +31,38 @@ class ElectionService {
    * Find all elections
    */
   async findAll(options = {}) {
+    const cacheKey = redisCache.isEnabled() ? this.buildElectionsCacheKey(options) : null;
+    if (cacheKey) {
+      const cached = await redisCache.getKey(cacheKey);
+      if (cached !== null) {
+        return Array.isArray(cached) ? cached : [];
+      }
+    }
+    const rows = await this._loadElectionsRows(options);
+    if (cacheKey) {
+      await redisCache.setKey(cacheKey, rows, ELECTIONS_CACHE_TTL);
+    }
+    return rows;
+  }
+
+  buildElectionsCacheKey(options = {}) {
+    const safe = (v) => String(v ?? '').trim().toLowerCase() !== '' ? String(v).trim().toLowerCase() : 'all';
+    const status = options.status ? safe(options.status) : (options.excludeDraft ? 'non-draft' : 'all');
+    return `${ELECTIONS_CACHE_KEY_PREFIX}${status}:${options.limit ?? 100}:${options.offset ?? 0}`;
+  }
+
+  async invalidateElections() {
+    await redisCache.deleteKeysWithPrefix('elections:');
+  }
+
+  async _loadElectionsRows(options = {}) {
     if (isMongoOnly) {
       // Mongo-only (Atlas M10): avoid Postgres query that throws 500.
       // Try to read from voteweb.elections if present, otherwise return []
       // so GET /api/v1/admin/elections loads (empty state) instead of 500.
       try {
-        const { MongoClient } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (!uri) return [];
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
+        const client = await getSharedClient();
+        if (!client) return [];
         const col = client.db(getMongoDbName()).collection('elections');
         const filter = {};
         if (options.status) filter.status = options.status;
@@ -43,7 +70,6 @@ class ElectionService {
         const lim = Math.min(parseInt(options.limit) || 100, 100);
         const off = parseInt(options.offset) || 0;
         const rows = await col.find(filter).sort({ _id: 1 }).skip(off).limit(lim).toArray();
-        await client.close();
         if (!rows.length) return [];
         // Map Mongo docs to Postgres-like shape expected by frontend
         return rows.map((r) => ({
@@ -93,11 +119,8 @@ class ElectionService {
   async findById(id) {
     if (isMongoOnly) {
       try {
-        const { MongoClient } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (!uri) return null;
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
+        const client = await getSharedClient();
+        if (!client) return null;
         const col = client.db(getMongoDbName()).collection('elections');
         // Try _id and numeric postgresId/id
         const { ObjectId } = require('mongodb');
@@ -110,7 +133,6 @@ class ElectionService {
         if (!doc) {
           doc = await col.findOne({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] });
         }
-        await client.close();
         if (!doc) return null;
         return {
           id: doc._id || doc.id || doc.postgresId,
@@ -149,18 +171,15 @@ class ElectionService {
   async create(data) {
     if (isMongoOnly) {
       try {
-        const { MongoClient } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (!uri) {
+        const client = await getSharedClient();
+        if (!client) {
           // Return dummy election to avoid 500 when Postgres is disabled
           return { id: Date.now(), name: data.name, description: data.description || null, start_time: data.start_time || null, end_time: data.end_time || null, status: 'DRAFT' };
         }
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
         const col = client.db(getMongoDbName()).collection('elections');
         const doc = { name: data.name, description: data.description || null, start_time: data.start_time || null, end_time: data.end_time || null, status: 'DRAFT', created_at: new Date(), updated_at: new Date() };
         const res = await col.insertOne(doc);
-        await client.close();
+        await this.invalidateElections();
         return { id: res.insertedId, ...doc };
       } catch (e) {
         console.warn('electionService.create mongo fallback failed:', e.message);
@@ -175,6 +194,8 @@ class ElectionService {
        RETURNING *`,
       [name, description || null, start_time || null, end_time || null]
     );
+
+    await this.invalidateElections();
 
     return result.rows[0];
   }
@@ -206,17 +227,15 @@ class ElectionService {
             throw error;
           }
         }
-        const { MongoClient, ObjectId } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (!uri) return { ...election, ...data, updated_at: new Date().toISOString() };
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
+        const client = await getSharedClient();
+        if (!client) return { ...election, ...data, updated_at: new Date().toISOString() };
+        const { ObjectId } = require('mongodb');
         const col = client.db(getMongoDbName()).collection('elections');
         const updates = {};
         for (const f of ['name', 'description', 'start_time', 'end_time']) {
           if (data[f] !== undefined) updates[f] = data[f];
         }
-        if (Object.keys(updates).length === 0) { await client.close(); return election; }
+        if (Object.keys(updates).length === 0) { return election; }
         updates.updated_at = new Date();
         updates.updatedAt = new Date();
         let filter = {};
@@ -233,9 +252,9 @@ class ElectionService {
         } catch (_) {
           res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
         }
-        await client.close();
         if (res && res.value) {
           const doc = res.value;
+          await this.invalidateElections();
           return { id: doc._id || doc.id || doc.postgresId, name: doc.name, description: doc.description || null, status: doc.status || election.status, start_time: doc.start_time || doc.startTime || null, end_time: doc.end_time || doc.endTime || null, updated_at: doc.updated_at || doc.updatedAt || new Date().toISOString() };
         }
         return { ...election, ...updates };
@@ -296,6 +315,7 @@ class ElectionService {
 
     const query = `UPDATE elections SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
     const result = await db.query(query, params);
+    await this.invalidateElections();
     return result.rows[0];
   }
 
@@ -316,11 +336,9 @@ class ElectionService {
             allowedTransitions: STATUS_TRANSITIONS[election.status] || [],
           };
         }
-        const { MongoClient, ObjectId } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (!uri) return { election: { ...election, status: newStatus }, previousStatus };
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
+        const client = await getSharedClient();
+        if (!client) return { election: { ...election, status: newStatus }, previousStatus };
+        const { ObjectId } = require('mongodb');
         const col = client.db(getMongoDbName()).collection('elections');
         const updates = { status: newStatus, updated_at: new Date(), updatedAt: new Date() };
         if (newStatus === 'PUBLISHED') { updates.results_published_at = new Date(); updates.resultsPublishedAt = new Date(); }
@@ -334,9 +352,9 @@ class ElectionService {
         } catch (_) {
           res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
         }
-        await client.close();
         if (res && res.value) {
           const doc = res.value;
+          await this.invalidateElections();
           return { election: { id: doc._id || doc.id || doc.postgresId, name: doc.name, status: doc.status, start_time: doc.start_time || doc.startTime || null, end_time: doc.end_time || doc.endTime || null, results_published_at: doc.results_published_at || doc.resultsPublishedAt || null }, previousStatus };
         }
         return { election: { ...election, status: newStatus }, previousStatus };
@@ -374,6 +392,8 @@ class ElectionService {
     params.push(id);
 
     const result = await db.query(query, params);
+
+    await this.invalidateElections();
 
     return { election: result.rows[0], previousStatus };
   }
@@ -679,11 +699,9 @@ class ElectionService {
       }
       // Mongo-only: try to update voteweb.elections
       try {
-        const { MongoClient, ObjectId } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (!uri) return { election: { ...election, status: 'PUBLISHED', results_published_at: new Date().toISOString() } };
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
+        const client = await getSharedClient();
+        if (!client) return { election: { ...election, status: 'PUBLISHED', results_published_at: new Date().toISOString() } };
+        const { ObjectId } = require('mongodb');
         const col = client.db(getMongoDbName()).collection('elections');
         const updates = { status: 'PUBLISHED', results_published_at: new Date(), resultsPublishedAt: new Date(), results_published_by: adminUserId, updated_at: new Date() };
         let filter = {};
@@ -696,9 +714,9 @@ class ElectionService {
         } catch (_) {
           res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
         }
-        await client.close();
         if (res && res.value) {
           const doc = res.value;
+          await this.invalidateElections();
           return { election: { id: doc._id || doc.id || doc.postgresId, name: doc.name, status: doc.status, results_published_at: doc.results_published_at || doc.resultsPublishedAt } };
         }
         return { election: { ...election, status: 'PUBLISHED', results_published_at: new Date().toISOString() } };
@@ -728,6 +746,8 @@ class ElectionService {
        RETURNING *`,
       [adminUserId, id]
     );
+
+    await this.invalidateElections();
 
     return { election: result.rows[0] };
   }

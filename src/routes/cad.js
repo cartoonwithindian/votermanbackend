@@ -17,7 +17,7 @@ const router = express.Router();
 
 const db = require('../db');
 const { requireStaff } = require('../middleware/requireRole');
-const { getMongoDbName } = require('../utils/mongoDbName');
+const { getDb: getSharedDb } = require('../db/mongoClient');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 router.use(requireStaff);
@@ -28,13 +28,9 @@ router.get('/overview', async (req, res) => {
     // Atlas M10 — avoid Postgres query that throws 500 when DATABASE_URL missing.
     // Return empty overview with 200; try Mongo ping with 2s timeout for liveness.
     try {
-      const { MongoClient } = require('mongodb');
-      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-      if (uri) {
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
-        await client.db(getMongoDbName()).command({ ping: 1 }).catch(() => {});
-        await client.close().catch(() => {});
+      const db = await getSharedDb();
+      if (db) {
+        await db.command({ ping: 1 }).catch(() => {});
       }
     } catch (e) {
       console.warn('cad overview mongo ping failed:', e.message);
@@ -111,14 +107,10 @@ router.get('/elections', async (req, res) => {
   if (isMongoOnly) {
     // Atlas M10 — avoid Postgres query that throws 500. Try Mongo with 2s timeout, fallback to empty list with 200.
     try {
-      const { MongoClient } = require('mongodb');
-      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-      if (!uri) return res.json({ data: { elections: [] } });
-      const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-      await client.connect();
-      const col = client.db(getMongoDbName()).collection('elections');
+      const db = await getSharedDb();
+      if (!db) return res.json({ data: { elections: [] } });
+      const col = db.collection('elections');
       const docs = await col.find({}).sort({ _id: 1 }).limit(100).toArray();
-      await client.close().catch(() => {});
       if (!docs.length) return res.json({ data: { elections: [] } });
       const elections = docs.map((r) => ({
         id: r._id || r.id || r.postgresId,
@@ -168,17 +160,14 @@ router.get('/elections/:id/results', async (req, res) => {
       const full = await voteService.getElectionResultsFull(id);
       if (!full) {
         // In Mongo-only mode with no elections, return empty results with 200 so /admin/results doesn't 500
-        const { MongoClient, ObjectId } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
+        const { ObjectId } = require('mongodb');
+        const db = await getSharedDb();
+        if (db) {
           try {
-            const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-            await client.connect();
-            const col = client.db(getMongoDbName()).collection('elections');
+            const col = db.collection('elections');
             let doc = null;
             try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ postgresId: id }, { id }] });
-            await client.close().catch(() => {});
             if (doc) {
               // Found election but no results yet — return empty structure with 200
               return res.json({ data: {
@@ -254,13 +243,9 @@ router.get('/voters', async (req, res) => {
   if (isMongoOnly) {
     // Atlas M10 — return empty voters with 200 instead of 500
     try {
-      const { MongoClient } = require('mongodb');
-      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-      if (uri) {
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
-        await client.db(getMongoDbName()).command({ ping: 1 }).catch(() => {});
-        await client.close().catch(() => {});
+      const db = await getSharedDb();
+      if (db) {
+        await db.command({ ping: 1 }).catch(() => {});
       }
     } catch (e) {
       console.warn('cad voters mongo ping failed:', e.message);

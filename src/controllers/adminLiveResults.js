@@ -7,14 +7,22 @@
  */
 const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
+const redisCache = require('../utils/redisCache');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 async function getLive(req, res) {
   if (isMongoOnly) {
+    const cacheKey = redisCache.isEnabled() ? 'admin:live:v1' : null;
+    if (cacheKey) {
+      const cached = await redisCache.getKey(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+    }
     try {
-      const { MongoClient } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-      await client.connect();
+      const client = await getSharedClient();
+      if (!client) throw new Error('MongoDB not configured');
       const dbMongo = client.db(getMongoDbName());
       const [studentsTotal, studentsActive, electionsTotal, electionsOpen, candidatesTotal, votesTotal, pendingApps] = await Promise.all([
         dbMongo.collection('students').countDocuments({ role: 'STUDENT' }),
@@ -38,8 +46,7 @@ async function getLive(req, res) {
         { $sort: { votes: -1, candidate_name: 1 } },
         { $limit: 10 },
       ]).toArray();
-      await client.close();
-      return res.json({
+      const payload = {
         data: {
           stats: {
             students: { total: studentsTotal, active: studentsActive, voting_eligible: studentsActive },
@@ -52,7 +59,11 @@ async function getLive(req, res) {
           leaderboard,
           generatedAt: new Date().toISOString(),
         },
-      });
+      };
+      if (cacheKey) {
+        await redisCache.setKey(cacheKey, payload, 12);
+      }
+      return res.json(payload);
     } catch (e) {
       console.error('admin live mongo failed:', e.message);
       // Fallback to empty if Atlas not reachable

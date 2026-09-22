@@ -5,6 +5,7 @@
 
 const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class SupportService {
@@ -22,19 +23,12 @@ class SupportService {
 
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('support_requests');
-            const doc = { student_id: studentId, studentId, election_id: electionId || null, electionId: electionId || null, category, subject, description, status: 'open', created_at: new Date(), createdAt: new Date(), updated_at: new Date(), updatedAt: new Date() };
-            const res = await col.insertOne(doc);
-            return { id: String(res.insertedId), student_id: studentId, election_id: electionId || null, category, subject, description, status: 'open', created_at: doc.created_at, updated_at: doc.updated_at };
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('support_requests');
+          const doc = { student_id: studentId, studentId, election_id: electionId || null, electionId: electionId || null, category, subject, description, status: 'open', created_at: new Date(), createdAt: new Date(), updated_at: new Date(), updatedAt: new Date() };
+          const res = await col.insertOne(doc);
+          return { id: String(res.insertedId), student_id: studentId, election_id: electionId || null, category, subject, description, status: 'open', created_at: doc.created_at, updated_at: doc.updated_at };
         }
       } catch (e) {
         console.warn('[supportService] create mongo fallback mock:', e.message);
@@ -66,25 +60,18 @@ class SupportService {
   async list({ studentId, status, electionId, assignedTo, limit = 50, offset = 0 }) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('support_requests');
-            const filter = {};
-            if (studentId) filter.$or = [{ student_id: studentId }, { studentId }, { student_id: String(studentId) }];
-            if (status) filter.status = status;
-            if (electionId) filter.$or = filter.$or ? [{ $and: [filter, { $or: [{ election_id: electionId }, { electionId }] }] }] : { election_id: electionId };
-            const docs = await col.find(studentId ? { $or: [{ student_id: studentId }, { studentId }, { student_id: String(studentId) }] } : {}).sort({ created_at: -1, createdAt: -1 }).limit(limit).skip(offset).toArray();
-            let rows = docs.map(d => ({ id: d._id ? String(d._id) : d.id, student_id: d.student_id ?? d.studentId, election_id: d.election_id ?? d.electionId, category: d.category, subject: d.subject, description: d.description, status: d.status || 'open', created_at: d.created_at ?? d.createdAt, updated_at: d.updated_at ?? d.updatedAt }));
-            if (status) rows = rows.filter(r => r.status === status);
-            if (electionId) rows = rows.filter(r => String(r.election_id) === String(electionId));
-            return rows;
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('support_requests');
+          const filter = {};
+          if (studentId) filter.$or = [{ student_id: studentId }, { studentId }, { student_id: String(studentId) }];
+          if (status) filter.status = status;
+          if (electionId) filter.$or = filter.$or ? [{ $and: [filter, { $or: [{ election_id: electionId }, { electionId }] }] }] : { election_id: electionId };
+          const docs = await col.find(studentId ? { $or: [{ student_id: studentId }, { studentId }, { student_id: String(studentId) }] } : {}).sort({ created_at: -1, createdAt: -1 }).limit(limit).skip(offset).toArray();
+          let rows = docs.map(d => ({ id: d._id ? String(d._id) : d.id, student_id: d.student_id ?? d.studentId, election_id: d.election_id ?? d.electionId, category: d.category, subject: d.subject, description: d.description, status: d.status || 'open', created_at: d.created_at ?? d.createdAt, updated_at: d.updated_at ?? d.updatedAt }));
+          if (status) rows = rows.filter(r => r.status === status);
+          if (electionId) rows = rows.filter(r => String(r.election_id) === String(electionId));
+          return rows;
         }
       } catch (e) {
         console.warn('[supportService] list mongo fallback to []:', e.message);
@@ -144,21 +131,15 @@ class SupportService {
   async getById(id) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('support_requests');
-            let doc = null;
-            try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
-            if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
-            if (!doc) return null;
-            return { id: doc._id ? String(doc._id) : doc.id, student_id: doc.student_id ?? doc.studentId, election_id: doc.election_id ?? doc.electionId, category: doc.category, subject: doc.subject, description: doc.description, status: doc.status || 'open', created_at: doc.created_at ?? doc.createdAt, updated_at: doc.updated_at ?? doc.updatedAt };
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const { ObjectId } = require('mongodb');
+          const col = client.db(getMongoDbName()).collection('support_requests');
+          let doc = null;
+          try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
+          if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
+          if (!doc) return null;
+          return { id: doc._id ? String(doc._id) : doc.id, student_id: doc.student_id ?? doc.studentId, election_id: doc.election_id ?? doc.electionId, category: doc.category, subject: doc.subject, description: doc.description, status: doc.status || 'open', created_at: doc.created_at ?? doc.createdAt, updated_at: doc.updated_at ?? doc.updatedAt };
         }
       } catch (e) {
         console.warn('[supportService] getById mongo fallback to null:', e.message);
@@ -186,29 +167,25 @@ class SupportService {
   async updateStatus(id, { status, assignedTo, response }) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('support_requests');
-            const updates = { updated_at: new Date(), updatedAt: new Date() };
-            if (status !== undefined) {
-              if (!this.VALID_STATUSES.includes(status)) throw new Error(`Invalid status. Must be one of: ${this.VALID_STATUSES.join(', ')}`);
-              updates.status = status;
-              if (status === 'resolved' || status === 'closed') { updates.resolved_at = new Date(); updates.resolvedAt = new Date(); }
-            }
-            if (assignedTo !== undefined) { updates.assigned_to = assignedTo; updates.assignedTo = assignedTo; }
-            if (response !== undefined) { updates.response = response; updates.responded_at = new Date(); updates.respondedAt = new Date(); }
-            let res = null;
-            try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
-            if (!res || !res.value) res = await col.findOneAndUpdate({ $or: [{ id: String(id) }, { _id: String(id) }] }, { $set: updates }, { returnDocument: 'after' });
-            if (res && res.value) {
-              const d = res.value;
-              return { id: d._id ? String(d._id) : d.id, student_id: d.student_id ?? d.studentId, election_id: d.election_id ?? d.electionId, category: d.category, subject: d.subject, description: d.description, status: d.status || 'open', response: d.response || null, created_at: d.created_at ?? d.createdAt, updated_at: d.updated_at ?? d.updatedAt };
-            }
-          } finally { await client.close().catch(() => {}); }
+        const client = await getSharedClient();
+        if (client) {
+          const { ObjectId } = require('mongodb');
+          const col = client.db(getMongoDbName()).collection('support_requests');
+          const updates = { updated_at: new Date(), updatedAt: new Date() };
+          if (status !== undefined) {
+            if (!this.VALID_STATUSES.includes(status)) throw new Error(`Invalid status. Must be one of: ${this.VALID_STATUSES.join(', ')}`);
+            updates.status = status;
+            if (status === 'resolved' || status === 'closed') { updates.resolved_at = new Date(); updates.resolvedAt = new Date(); }
+          }
+          if (assignedTo !== undefined) { updates.assigned_to = assignedTo; updates.assignedTo = assignedTo; }
+          if (response !== undefined) { updates.response = response; updates.responded_at = new Date(); updates.respondedAt = new Date(); }
+          let res = null;
+          try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
+          if (!res || !res.value) res = await col.findOneAndUpdate({ $or: [{ id: String(id) }, { _id: String(id) }] }, { $set: updates }, { returnDocument: 'after' });
+          if (res && res.value) {
+            const d = res.value;
+            return { id: d._id ? String(d._id) : d.id, student_id: d.student_id ?? d.studentId, election_id: d.election_id ?? d.electionId, category: d.category, subject: d.subject, description: d.description, status: d.status || 'open', response: d.response || null, created_at: d.created_at ?? d.createdAt, updated_at: d.updated_at ?? d.updatedAt };
+          }
         }
       } catch (e) { console.warn('[supportService] updateStatus mongo fallback:', e.message); if (e.message && e.message.includes('Invalid status')) throw e; }
       // Fallback mock to avoid 500

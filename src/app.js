@@ -45,6 +45,7 @@ const { requireAuth } = require('./middleware/requireAuth');
 const { requireAdmin } = require('./middleware/requireAdmin');
 const { httpMetricsMiddleware, metricsHandler, buildMonitoringSummary } = require('./monitoring/metrics');
 const { getMongoDbName } = require('./utils/mongoDbName');
+const { getClient } = require('./db/mongoClient');
 
 const app = express();
 const isDev = process.env.NODE_ENV !== 'production';
@@ -160,11 +161,9 @@ app.get('/api/health/db', async (req, res) => {
   // MongoDB-only (Atlas M10) — check Mongo ping when Postgres not configured
   if (!process.env.DATABASE_URL && process.env.MONGODB_URI) {
     try {
-      const { MongoClient } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI);
-      await client.connect();
+      const client = await getClient();
+      if (!client) throw new Error('MongoDB not configured');
       await client.db(getMongoDbName()).command({ ping: 1 });
-      await client.close();
       res.json({
         status: 'ok',
         database: 'connected',

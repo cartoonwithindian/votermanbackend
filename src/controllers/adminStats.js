@@ -6,25 +6,30 @@
  */
 const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
+const redisCache = require('../utils/redisCache');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 async function getStats(req, res) {
   if (isMongoOnly) {
+    const cacheKey = redisCache.isEnabled() ? 'admin:stats:v1' : null;
+    if (cacheKey) {
+      const cached = await redisCache.getKey(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+    }
     // Atlas M10 — Postgres not configured — return empty stats with 200 instead of 500.
     // Try Mongo ping with 2s timeout to verify connectivity, otherwise just return zeros.
     try {
-      const { MongoClient } = require('mongodb');
-      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-      if (uri) {
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
+      const client = await getSharedClient();
+      if (client) {
         await client.db(getMongoDbName()).command({ ping: 1 }).catch(() => {});
-        await client.close().catch(() => {});
       }
     } catch (e) {
       console.warn('admin stats mongo ping failed:', e.message);
     }
-    return res.json({
+    const payload = {
       data: {
         students: { total: 0, active: 0, voting_eligible: 0 },
         elections: { total: 0, open: 0, published: 0 },
@@ -34,7 +39,11 @@ async function getStats(req, res) {
         pendingCandidateApplications: 0,
         generatedAt: new Date().toISOString(),
       },
-    });
+    };
+    if (cacheKey) {
+      await redisCache.setKey(cacheKey, payload, 12);
+    }
+    return res.json(payload);
   }
   try {
     const [students, elections, candidates, votes, requests, pendingApps] = await Promise.all([

@@ -10,6 +10,7 @@ const electionService = require('./electionService');
 const positionService = require('./positionService');
 const { normalizeYear } = require('../utils/yearNormalizer');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 function getMongoUri() { return process.env.MONGODB_URI || process.env.MONGODB_URL || null; }
 
@@ -20,13 +21,9 @@ class CandidateApplicationService {
   async create(data, studentId) {
     if (isMongoOnly) {
       try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
             const existing = await col.findOne({ student_id: studentId, status: { $ne: 'rejected' } });
             if (existing) {
               const error = new Error('An application already exists for this student.');
@@ -79,10 +76,7 @@ class CandidateApplicationService {
             const res = await col.insertOne(doc);
             const inserted = { id: String(res.insertedId), student_id: studentId, full_name: doc.full_name, enrollment_number: doc.enrollment_number, department: doc.department, year: doc.year, semester: doc.semester, section: doc.section, position_id: doc.position_id, contesting_position: doc.contesting_position, email: doc.email, phone: doc.phone, profile_photo_url: doc.profile_photo_url, bio: doc.bio, manifesto: doc.manifesto, age: doc.age, date_of_birth: doc.date_of_birth, gender: doc.gender, aadhar_number: doc.aadhar_number, category: doc.category, election_id: doc.election_id, status: doc.status, submitted_at: doc.submitted_at, created_at: doc.created_at };
             return this.formatApplication(inserted);
-          } finally {
-            await client.close().catch(() => {});
-          }
-        }
+          } finally {}        }
       } catch (e) {
         if (e.code === 'DUPLICATE_ENROLLMENT' || e.code === 'INVALID_CATEGORY') throw e;
         console.warn('[candidateApplicationService] create mongo fallback mock:', e.message);
@@ -193,23 +187,16 @@ class CandidateApplicationService {
   async getByStudentId(studentId) {
     if (isMongoOnly) {
       try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
             const docs = await col.find({ $or: [{ student_id: studentId }, { studentId }, { student_id: String(studentId) }] }).sort({ created_at: -1, createdAt: -1 }).limit(1).toArray();
             if (!docs.length) return null;
             const row = docs[0];
             // Map Mongo doc to Postgres row shape
             const mapped = { id: row._id ? String(row._id) : row.id, student_id: row.student_id ?? row.studentId, full_name: row.full_name ?? row.fullName, enrollment_number: row.enrollment_number ?? row.enrollmentNumber, department: row.department, year: row.year, semester: row.semester, section: row.section, position_id: row.position_id ?? row.positionId, contesting_position: row.contesting_position ?? row.contestingPosition, email: row.email, phone: row.phone, profile_photo_url: row.profile_photo_url ?? row.profilePhotoUrl, bio: row.bio, manifesto: row.manifesto, age: row.age, date_of_birth: row.date_of_birth ?? row.dateOfBirth, gender: row.gender, aadhar_number: row.aadhar_number ?? row.aadharNumber, category: row.category || 'CR', election_id: row.election_id ?? row.electionId, status: row.status, rejection_reason: row.rejection_reason ?? row.rejectionReason, changes_requested_reason: row.changes_requested_reason ?? row.changesRequestedReason, reviewed_by: row.reviewed_by ?? row.reviewedBy, submitted_at: row.submitted_at ?? row.created_at ?? row.createdAt, created_at: row.created_at ?? row.createdAt, updated_at: row.updated_at ?? row.updatedAt };
             return this.formatApplication(mapped);
-          } finally {
-            await client.close().catch(() => {});
-          }
-        }
+          } finally {}        }
       } catch (e) {
         console.warn('[candidateApplicationService] getByStudentId mongo fallback to null:', e.message);
       }
@@ -246,23 +233,16 @@ class CandidateApplicationService {
   async getById(id) {
     if (isMongoOnly) {
       try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
             let doc = null;
             try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
             if (!doc) return null;
             const mapped = { id: doc._id ? String(doc._id) : doc.id, student_id: doc.student_id ?? doc.studentId, full_name: doc.full_name ?? doc.fullName, enrollment_number: doc.enrollment_number ?? doc.enrollmentNumber, department: doc.department, year: doc.year, semester: doc.semester, section: doc.section, position_id: doc.position_id ?? doc.positionId, contesting_position: doc.contesting_position ?? doc.contestingPosition, email: doc.email, phone: doc.phone, profile_photo_url: doc.profile_photo_url ?? doc.profilePhotoUrl, bio: doc.bio, manifesto: doc.manifesto, age: doc.age, date_of_birth: doc.date_of_birth ?? doc.dateOfBirth, gender: doc.gender, aadhar_number: doc.aadhar_number ?? doc.aadharNumber, category: doc.category || 'CR', election_id: doc.election_id ?? doc.electionId, status: doc.status, rejection_reason: doc.rejection_reason ?? doc.rejectionReason, changes_requested_reason: doc.changes_requested_reason ?? doc.changesRequestedReason, reviewed_by: doc.reviewed_by ?? doc.reviewedBy, submitted_at: doc.submitted_at ?? doc.created_at ?? doc.createdAt, created_at: doc.created_at ?? doc.createdAt, updated_at: doc.updated_at ?? doc.updatedAt };
             return this.formatApplication(mapped);
-          } finally {
-            await client.close().catch(() => {});
-          }
-        }
+          } finally {}        }
       } catch (e) {
         console.warn('[candidateApplicationService] getById mongo fallback to null:', e.message);
       }
@@ -296,13 +276,9 @@ class CandidateApplicationService {
   async listForAdmin(filters = {}) {
     if (isMongoOnly) {
 try {
-          const uri = getMongoUri();
-          if (uri) {
-            const { MongoClient } = require('mongodb');
-            const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-            await client.connect();
-            try {
-            const db = client.db(getMongoDbName());
+          const client = await getSharedClient();
+          if (client) {
+            try {            const db = client.db(getMongoDbName());
             const col = db.collection('candidate_applications');
             let docs = [];
             try {
@@ -399,10 +375,7 @@ try {
                 return this.formatApplication(mappedRow);
               });
               return mapped;
-            } finally {
-              await client.close().catch(() => {});
-            }
-          }
+            } finally {}          }
         } catch (e) {
         console.warn('[candidateApplicationService] listForAdmin mongo fallback to []:', e.message);
       }
@@ -654,13 +627,9 @@ try {
     if (isMongoOnly) {
       // Mongo-only: try Mongo update, otherwise mock to avoid 500
       try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
             let filter = {};
             try { if (ObjectId.isValid(String(id))) filter = { _id: new ObjectId(String(id)) }; } catch (_) {}
             if (!filter._id) filter = { $or: [{ id: String(id) }, { _id: String(id) }] };
@@ -684,8 +653,7 @@ try {
                const mapped = { id: updated._id ? String(updated._id) : updated.id, student_id: updated.student_id ?? updated.studentId, full_name: updated.full_name ?? updated.fullName, enrollment_number: updated.enrollment_number ?? updated.enrollmentNumber, department: updated.department, year: updated.year, semester: updated.semester, section: updated.section, position_id: updated.position_id ?? updated.positionId, contesting_position: updated.contesting_position ?? updated.contestingPosition, email: updated.email, phone: updated.phone, profile_photo_url: updated.profile_photo_url ?? updated.profilePhotoUrl, bio: updated.bio, manifesto: updated.manifesto, age: updated.age, date_of_birth: updated.date_of_birth ?? updated.dateOfBirth, gender: updated.gender, aadhar_number: updated.aadhar_number ?? updated.aadharNumber, category: updated.category || 'CR', election_id: updated.election_id ?? updated.electionId, status: updated.status, rejection_reason: updated.rejection_reason, changes_requested_reason: updated.changes_requested_reason, reviewed_by: updated.reviewed_by ?? updated.reviewedBy, submitted_at: updated.submitted_at, created_at: updated.created_at, updated_at: updated.updated_at };
                return this.formatApplication(mapped);
              }
-           } finally { await client.close().catch(() => {}); }
-         }
+           } finally {}         }
       } catch (e) {
         console.warn('[candidateApplicationService] approve mongo fallback:', e.message);
         if (e.code) throw e;
@@ -895,13 +863,9 @@ try {
 
     if (isMongoOnly) {
       try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
             const updates = { election_id: electionId, electionId, position_id: crPosition.id, positionId: crPosition.id, updated_at: new Date(), updatedAt: new Date() };
             let res = null;
             try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)), status: 'approved' }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
@@ -912,8 +876,7 @@ try {
               const mapped = { id: doc._id ? String(doc._id) : doc.id, student_id: doc.student_id ?? doc.studentId, full_name: doc.full_name ?? doc.fullName, enrollment_number: doc.enrollment_number ?? doc.enrollmentNumber, department: doc.department, year: doc.year, semester: doc.semester, section: doc.section, position_id: doc.position_id ?? doc.positionId, contesting_position: doc.contesting_position ?? doc.contestingPosition, email: doc.email, phone: doc.phone, profile_photo_url: doc.profile_photo_url ?? doc.profilePhotoUrl, bio: doc.bio, manifesto: doc.manifesto, age: doc.age, date_of_birth: doc.date_of_birth ?? doc.dateOfBirth, gender: doc.gender, aadhar_number: doc.aadhar_number ?? doc.aadharNumber, category: doc.category || 'CR', election_id: doc.election_id ?? doc.electionId, status: doc.status, rejection_reason: doc.rejection_reason, changes_requested_reason: doc.changes_requested_reason, reviewed_by: doc.reviewed_by, submitted_at: doc.submitted_at, created_at: doc.created_at, updated_at: doc.updated_at };
               return this.formatApplication(mapped);
             }
-          } finally { await client.close().catch(() => {}); }
-        }
+          } finally {}        }
       } catch (e) {
         console.warn('[candidateApplicationService] assignBallot mongo fallback:', e.message);
         if (e.code) throw e;
@@ -981,13 +944,9 @@ try {
   async placeUnplacedForElection(electionId) {
     if (isMongoOnly) {
       try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
             const pending = await col.find({ status: 'approved', $or: [{ category: 'CR' }, { category: 'CLASS_REPRESENTATIVE' }], $or: [{ election_id: null }, { position_id: null }, { electionId: null }, { positionId: null }] }).limit(100).toArray();
             const placed = []; const skipped = [];
             for (const doc of pending) {
@@ -1002,8 +961,7 @@ try {
               } catch (err) { skipped.push(doc._id ? String(doc._id) : doc.id); }
             }
             return { placed, skipped };
-          } finally { await client.close().catch(() => {}); }
-        }
+          } finally {}        }
       } catch (e) { console.warn('[candidateApplicationService] placeUnplacedForElection mongo fallback:', e.message); }
       return { placed: [], skipped: [] };
     }
@@ -1075,13 +1033,9 @@ try {
 
     if (isMongoOnly) {
       try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
             const updates = { status: 'rejected', rejection_reason: reason, rejectionReason: reason, reviewed_by: adminId, reviewedBy: adminId, reviewed_at: new Date(), reviewedAt: new Date(), updated_at: new Date(), updatedAt: new Date() };
             let res = null;
             try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)), status: 'under_review' }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
@@ -1091,8 +1045,7 @@ try {
               const mapped = { id: doc._id ? String(doc._id) : doc.id, student_id: doc.student_id ?? doc.studentId, full_name: doc.full_name ?? doc.fullName, enrollment_number: doc.enrollment_number ?? doc.enrollmentNumber, department: doc.department, year: doc.year, semester: doc.semester, section: doc.section, position_id: doc.position_id ?? doc.positionId, contesting_position: doc.contesting_position ?? doc.contestingPosition, email: doc.email, phone: doc.phone, profile_photo_url: doc.profile_photo_url ?? doc.profilePhotoUrl, bio: doc.bio, manifesto: doc.manifesto, age: doc.age, date_of_birth: doc.date_of_birth ?? doc.dateOfBirth, gender: doc.gender, aadhar_number: doc.aadhar_number ?? doc.aadharNumber, category: doc.category || 'CR', election_id: doc.election_id ?? doc.electionId, status: doc.status, rejection_reason: doc.rejection_reason ?? doc.rejectionReason, reviewed_by: doc.reviewed_by ?? doc.reviewedBy, submitted_at: doc.submitted_at, created_at: doc.created_at, updated_at: doc.updated_at };
               return this.formatApplication(mapped);
             }
-          } finally { await client.close().catch(() => {}); }
-        }
+          } finally {}        }
       } catch (e) {
         console.warn('[candidateApplicationService] reject mongo fallback:', e.message);
         if (e.code) throw e;
@@ -1171,13 +1124,9 @@ try {
 
     if (isMongoOnly) {
       try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
             const updates = { status: 'changes_requested', changes_requested_reason: reason, changesRequestedReason: reason, reviewed_by: adminId, reviewedBy: adminId, reviewed_at: new Date(), reviewedAt: new Date(), updated_at: new Date(), updatedAt: new Date() };
             let res = null;
             try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)), status: 'under_review' }, { $set: updates }, { returnDocument: 'after' }); } catch (_) {}
@@ -1187,8 +1136,7 @@ try {
               const mapped = { id: doc._id ? String(doc._id) : doc.id, student_id: doc.student_id ?? doc.studentId, full_name: doc.full_name ?? doc.fullName, enrollment_number: doc.enrollment_number ?? doc.enrollmentNumber, department: doc.department, year: doc.year, semester: doc.semester, section: doc.section, position_id: doc.position_id ?? doc.positionId, contesting_position: doc.contesting_position ?? doc.contestingPosition, email: doc.email, phone: doc.phone, profile_photo_url: doc.profile_photo_url ?? doc.profilePhotoUrl, bio: doc.bio, manifesto: doc.manifesto, age: doc.age, date_of_birth: doc.date_of_birth ?? doc.dateOfBirth, gender: doc.gender, aadhar_number: doc.aadhar_number ?? doc.aadharNumber, category: doc.category || 'CR', election_id: doc.election_id ?? doc.electionId, status: doc.status, changes_requested_reason: doc.changes_requested_reason ?? doc.changesRequestedReason, reviewed_by: doc.reviewed_by ?? doc.reviewedBy, submitted_at: doc.submitted_at, created_at: doc.created_at, updated_at: doc.updated_at };
               return this.formatApplication(mapped);
             }
-          } finally { await client.close().catch(() => {}); }
-        }
+          } finally {}        }
       } catch (e) {
         console.warn('[candidateApplicationService] requestChanges mongo fallback:', e.message);
         if (e.code) throw e;
@@ -1245,13 +1193,9 @@ try {
       }
       const { bio, manifesto, profilePhotoUrl, email, phone } = data;
       try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
             const updates = { status: 'under_review', updated_at: new Date(), updatedAt: new Date(), changes_requested_reason: null, changesRequestedReason: null, reviewed_by: null, reviewedBy: null };
             if (bio !== undefined) { updates.bio = bio; }
             if (manifesto !== undefined) updates.manifesto = manifesto;
@@ -1266,10 +1210,7 @@ try {
               const mapped = { id: doc._id ? String(doc._id) : doc.id, student_id: doc.student_id ?? doc.studentId, full_name: doc.full_name ?? doc.fullName, enrollment_number: doc.enrollment_number ?? doc.enrollmentNumber, department: doc.department, year: doc.year, semester: doc.semester, section: doc.section, position_id: doc.position_id ?? doc.positionId, contesting_position: doc.contesting_position ?? doc.contestingPosition, email: doc.email, phone: doc.phone, profile_photo_url: doc.profile_photo_url ?? doc.profilePhotoUrl, bio: doc.bio, manifesto: doc.manifesto, age: doc.age, date_of_birth: doc.date_of_birth ?? doc.dateOfBirth, gender: doc.gender, aadhar_number: doc.aadhar_number ?? doc.aadharNumber, category: doc.category || 'CR', election_id: doc.election_id ?? doc.electionId, status: doc.status, rejection_reason: doc.rejection_reason, changes_requested_reason: doc.changes_requested_reason, reviewed_by: doc.reviewed_by, submitted_at: doc.submitted_at, created_at: doc.created_at, updated_at: doc.updated_at };
               return this.formatApplication(mapped);
             }
-          } finally {
-            await client.close().catch(() => {});
-          }
-        }
+          } finally {}        }
       } catch (e) {
         console.warn('[candidateApplicationService] resubmit mongo fallback:', e.message);
         if (e.code) throw e;
@@ -1350,13 +1291,9 @@ try {
       }
       const { bio, manifesto, profilePhotoUrl } = data;
       try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient, ObjectId } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
+        const client = await getSharedClient();
+        if (client) {
+          try {            const col = client.db(getMongoDbName()).collection('candidate_applications');
             const updates = { updated_at: new Date(), updatedAt: new Date() };
             if (bio !== undefined) updates.bio = bio;
             if (manifesto !== undefined) updates.manifesto = manifesto;
@@ -1369,10 +1306,7 @@ try {
               const mapped = { id: doc._id ? String(doc._id) : doc.id, student_id: doc.student_id ?? doc.studentId, full_name: doc.full_name ?? doc.fullName, enrollment_number: doc.enrollment_number ?? doc.enrollmentNumber, department: doc.department, year: doc.year, semester: doc.semester, section: doc.section, position_id: doc.position_id ?? doc.positionId, contesting_position: doc.contesting_position ?? doc.contestingPosition, email: doc.email, phone: doc.phone, profile_photo_url: doc.profile_photo_url ?? doc.profilePhotoUrl, bio: doc.bio, manifesto: doc.manifesto, age: doc.age, date_of_birth: doc.date_of_birth ?? doc.dateOfBirth, gender: doc.gender, aadhar_number: doc.aadhar_number ?? doc.aadharNumber, category: doc.category || 'CR', election_id: doc.election_id ?? doc.electionId, status: doc.status, rejection_reason: doc.rejection_reason, changes_requested_reason: doc.changes_requested_reason, reviewed_by: doc.reviewed_by, submitted_at: doc.submitted_at, created_at: doc.created_at, updated_at: doc.updated_at };
               return this.formatApplication(mapped);
             }
-          } finally {
-            await client.close().catch(() => {});
-          }
-        }
+          } finally {}        }
       } catch (e) {
         console.warn('[candidateApplicationService] updateProfile mongo fallback:', e.message);
         if (e.code) throw e;

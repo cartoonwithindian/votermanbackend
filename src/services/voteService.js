@@ -8,6 +8,7 @@ const db = require('../db');
 const crypto = require('crypto');
 const { incVotesCast } = require('../monitoring/metrics');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -27,60 +28,53 @@ class VoteService {
     // friendly unavailable message instead of 500.
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const dbName = getMongoDbName();
-            const votesCol = client.db(dbName).collection('votes');
-            // Ensure unique index on (studentId, electionId, positionId) to prevent duplicate votes
-            await votesCol.createIndex(
-              { studentId: 1, electionId: 1, positionId: 1 },
-              { unique: true, background: true }
-            ).catch(() => {});
-            // Minimal validation: check duplicate vote in Mongo
-            const existing = await votesCol.findOne({
-              studentId: parseInt(studentId),
-              electionId: parseInt(electionId),
-              positionId: parseInt(positionId),
-            });
-            if (existing) {
-              return { success: false, error: 'You have already voted for this position', code: 'ALREADY_VOTED', status: 409 };
-            }
-            // Insert dummy vote in Mongo to allow student flow without Postgres
-            const now = new Date();
-            const mockVote = {
-              student_id: parseInt(studentId),
-              studentId: parseInt(studentId),
-              election_id: parseInt(electionId),
-              electionId: parseInt(electionId),
-              constituency_id: constituencyId ? parseInt(constituencyId) : null,
-              constituencyId: constituencyId ? parseInt(constituencyId) : null,
-              position_id: parseInt(positionId),
-              positionId: parseInt(positionId),
-              candidate_id: parseInt(candidateId),
-              candidateId: parseInt(candidateId),
-              voted_at: now,
-              createdAt: now,
-            };
-            const res = await votesCol.insertOne(mockVote);
-            const vote = {
-              id: res.insertedId,
-              student_id: mockVote.student_id,
-              election_id: mockVote.election_id,
-              constituency_id: mockVote.constituency_id,
-              position_id: mockVote.position_id,
-              candidate_id: mockVote.candidate_id,
-              voted_at: now,
-            };
-            incVotesCast();
-            const receipt = await this.generateReceipt(vote.id, vote.election_id, vote.student_id);
-            return { success: true, vote, receipt, status: 201 };
-          } finally {
-            await client.close().catch(() => {});
+        const client = await getSharedClient();
+        if (client) {
+          const dbName = getMongoDbName();
+          const votesCol = client.db(dbName).collection('votes');
+          // Ensure unique index on (studentId, electionId, positionId) to prevent duplicate votes
+          await votesCol.createIndex(
+            { studentId: 1, electionId: 1, positionId: 1 },
+            { unique: true, background: true }
+          ).catch(() => {});
+          // Minimal validation: check duplicate vote in Mongo
+          const existing = await votesCol.findOne({
+            studentId: parseInt(studentId),
+            electionId: parseInt(electionId),
+            positionId: parseInt(positionId),
+          });
+          if (existing) {
+            return { success: false, error: 'You have already voted for this position', code: 'ALREADY_VOTED', status: 409 };
           }
+          // Insert dummy vote in Mongo to allow student flow without Postgres
+          const now = new Date();
+          const mockVote = {
+            student_id: parseInt(studentId),
+            studentId: parseInt(studentId),
+            election_id: parseInt(electionId),
+            electionId: parseInt(electionId),
+            constituency_id: constituencyId ? parseInt(constituencyId) : null,
+            constituencyId: constituencyId ? parseInt(constituencyId) : null,
+            position_id: parseInt(positionId),
+            positionId: parseInt(positionId),
+            candidate_id: parseInt(candidateId),
+            candidateId: parseInt(candidateId),
+            voted_at: now,
+            createdAt: now,
+          };
+          const res = await votesCol.insertOne(mockVote);
+          const vote = {
+            id: res.insertedId,
+            student_id: mockVote.student_id,
+            election_id: mockVote.election_id,
+            constituency_id: mockVote.constituency_id,
+            position_id: mockVote.position_id,
+            candidate_id: mockVote.candidate_id,
+            voted_at: now,
+          };
+          incVotesCast();
+          const receipt = await this.generateReceipt(vote.id, vote.election_id, vote.student_id);
+          return { success: true, vote, receipt, status: 201 };
         }
       } catch (e) {
         console.warn('voteService.castVote mongo fallback failed:', e.message);
@@ -404,19 +398,12 @@ class VoteService {
     if (isMongoOnly) {
       // Mongo-only: try to persist receipt in Mongo, otherwise return dummy without DB
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('vote_receipts');
-            const doc = { vote_id: voteId, voteId, election_id: electionId, electionId, student_id: studentId, studentId, receipt_hash: receiptHash, receiptHash, nullifier, created_at: new Date(), createdAt: new Date() };
-            const res = await col.insertOne(doc);
-            return { receiptId: res.insertedId, receiptHash, nullifier, createdAt: doc.created_at };
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('vote_receipts');
+          const doc = { vote_id: voteId, voteId, election_id: electionId, electionId, student_id: studentId, studentId, receipt_hash: receiptHash, receiptHash, nullifier, created_at: new Date(), createdAt: new Date() };
+          const res = await col.insertOne(doc);
+          return { receiptId: res.insertedId, receiptHash, nullifier, createdAt: doc.created_at };
         }
       } catch (e) {
         console.warn('voteService.generateReceipt mongo fallback failed:', e.message);
@@ -459,23 +446,16 @@ class VoteService {
   async getElectionResults(electionId) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('votes');
-            const pipeline = [
-              { $match: { $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }] } },
-              { $group: { _id: '$candidate_id', candidate_id: { $first: '$candidate_id' }, position_id: { $first: '$position_id' }, vote_count: { $sum: 1 } } },
-            ];
-            const docs = await col.aggregate(pipeline).toArray();
-            // Return empty-shaped rows compatible with caller; detailed joins omitted in Mongo-only
-            return docs.map(d => ({ candidate_id: d.candidate_id, candidate_name: `Candidate ${d.candidate_id}`, position_id: d.position_id, position_name: 'Position', constituency_id: null, constituency_name: null, vote_count: String(d.vote_count) }));
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('votes');
+          const pipeline = [
+            { $match: { $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }] } },
+            { $group: { _id: '$candidate_id', candidate_id: { $first: '$candidate_id' }, position_id: { $first: '$position_id' }, vote_count: { $sum: 1 } } },
+          ];
+          const docs = await col.aggregate(pipeline).toArray();
+          // Return empty-shaped rows compatible with caller; detailed joins omitted in Mongo-only
+          return docs.map(d => ({ candidate_id: d.candidate_id, candidate_name: `Candidate ${d.candidate_id}`, position_id: d.position_id, position_name: 'Position', constituency_id: null, constituency_name: null, vote_count: String(d.vote_count) }));
         }
       } catch (e) {
         console.warn('voteService.getElectionResults mongo fallback failed:', e.message);
@@ -510,21 +490,14 @@ class VoteService {
   async getPositionResults(electionId, positionId) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('votes');
-            const docs = await col.aggregate([
-              { $match: { $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }], $or: [{ position_id: parseInt(positionId) }, { positionId: parseInt(positionId) }] } },
-              { $group: { _id: '$candidate_id', candidate_id: { $first: '$candidate_id' }, candidate_name: { $first: '$candidate_name' }, vote_count: { $sum: 1 } } },
-            ]).toArray();
-            return docs.map(d => ({ candidate_id: d.candidate_id, candidate_name: d.candidate_name || `Candidate ${d.candidate_id}`, vote_count: String(d.vote_count) }));
-          } finally {
-            await client.close().catch(() => {});
-          }
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('votes');
+          const docs = await col.aggregate([
+            { $match: { $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }], $or: [{ position_id: parseInt(positionId) }, { positionId: parseInt(positionId) }] } },
+            { $group: { _id: '$candidate_id', candidate_id: { $first: '$candidate_id' }, candidate_name: { $first: '$candidate_name' }, vote_count: { $sum: 1 } } },
+          ]).toArray();
+          return docs.map(d => ({ candidate_id: d.candidate_id, candidate_name: d.candidate_name || `Candidate ${d.candidate_id}`, vote_count: String(d.vote_count) }));
         }
       } catch (e) {
         console.warn('voteService.getPositionResults mongo fallback failed:', e.message);
@@ -751,28 +724,21 @@ class VoteService {
   async checkVotes(studentId, electionId, positionIdList = null) {
     if (isMongoOnly) {
       try {
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('votes');
-            const filter = { $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] };
-            if (positionIdList) {
-              filter.$or = filter.$or.map(f => ({ ...f, position_id: { $in: positionIdList.map(Number) } }));
-              // simplified: query by student+election then filter in JS
-              const docs = await col.find({ studentId: parseInt(studentId), electionId: parseInt(electionId) }).toArray();
-              const votedPositions = [...new Set(docs.map(d => d.positionId ?? d.position_id).filter(Boolean))].filter(id => !positionIdList || positionIdList.includes(id));
-              const filtered = positionIdList ? votedPositions.filter(id => positionIdList.includes(id)) : votedPositions;
-              return { votedPositions: filtered, canVote: positionIdList ? filtered.length < positionIdList.length : true };
-            }
-            const docs = await col.find({ $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] }).toArray();
-            const votedPositions = [...new Set(docs.map(d => d.position_id ?? d.positionId).filter(Boolean))];
-            return { votedPositions, canVote: positionIdList ? positionIdList.filter(id => !votedPositions.includes(id)).length > 0 : true };
-          } finally {
-            await client.close().catch(() => {});
+        const client = await getSharedClient();
+        if (client) {
+          const col = client.db(getMongoDbName()).collection('votes');
+          const filter = { $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] };
+          if (positionIdList) {
+            filter.$or = filter.$or.map(f => ({ ...f, position_id: { $in: positionIdList.map(Number) } }));
+            // simplified: query by student+election then filter in JS
+            const docs = await col.find({ studentId: parseInt(studentId), electionId: parseInt(electionId) }).toArray();
+            const votedPositions = [...new Set(docs.map(d => d.positionId ?? d.position_id).filter(Boolean))].filter(id => !positionIdList || positionIdList.includes(id));
+            const filtered = positionIdList ? votedPositions.filter(id => positionIdList.includes(id)) : votedPositions;
+            return { votedPositions: filtered, canVote: positionIdList ? filtered.length < positionIdList.length : true };
           }
+          const docs = await col.find({ $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] }).toArray();
+          const votedPositions = [...new Set(docs.map(d => d.position_id ?? d.positionId).filter(Boolean))];
+          return { votedPositions, canVote: positionIdList ? positionIdList.filter(id => !votedPositions.includes(id)).length > 0 : true };
         }
       } catch (e) {
         console.warn('voteService.checkVotes mongo fallback failed:', e.message);

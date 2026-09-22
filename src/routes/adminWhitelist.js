@@ -10,6 +10,7 @@ const router = express.Router();
 const db = require('../db');
 const { csrfProtection } = require('../middleware/csrfProtection');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 
 // MongoDB-only (Atlas M10) — no Postgres students table; whitelist lives in Postgres
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
@@ -24,9 +25,8 @@ router.get('/', async (req, res) => {
   // Mongo-only (Atlas M10) — students/whitelist lives in Postgres; return empty gracefully to avoid 500
   if (isMongoOnly) {
     try {
-      const { MongoClient } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-      await client.connect();
+      const client = await getSharedClient();
+      if (!client) throw new Error('MongoDB not configured');
       const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       // Attempt to serve whitelist from Mongo students collection (paginated, filtered)
       const {
@@ -60,7 +60,6 @@ router.get('/', async (req, res) => {
       else if (is_registered === 'false') filter.$or ? filter.passwordHash = null : (filter.passwordHash = null);
       const total = await col.countDocuments(filter);
       const rows = await col.find(filter).sort({ department: 1, year: 1, section: 1, name: 1 }).skip((pageNum - 1) * limitNum).limit(limitNum).toArray();
-      await client.close();
       // Map Mongo docs to Postgres-like response shape
       const whitelist = rows.map(r => ({
         id: r._id,
@@ -183,9 +182,9 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   if (isMongoOnly) {
     try {
-      const { MongoClient, ObjectId } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-      await client.connect();
+      const { ObjectId } = require('mongodb');
+      const client = await getSharedClient();
+      if (!client) throw new Error('MongoDB not configured');
       const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       const rawId = req.params.id;
       let doc = null;
@@ -197,7 +196,6 @@ router.get('/:id', async (req, res) => {
       if (!doc && !isNaN(parseInt(rawId, 10))) {
         doc = await col.findOne({ postgresId: parseInt(rawId, 10) });
       }
-      await client.close();
       if (!doc) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
       const mapped = {
         id: doc._id,
@@ -256,13 +254,11 @@ router.post('/', csrfProtection, async (req, res) => {
         return res.status(400).json({ error: { code: 'INVALID_EMAIL', message: 'Valid email is required.' } });
       }
       const normalizedEmail = email.trim().toLowerCase();
-      const { MongoClient } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-      await client.connect();
+      const client = await getSharedClient();
+      if (!client) throw new Error('MongoDB not configured');
       const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       const dup = await col.findOne({ $or: [{ email: normalizedEmail }, { officialEmail: normalizedEmail }, { currentLoginEmail: normalizedEmail }] });
       if (dup) {
-        await client.close();
         return res.status(409).json({ error: { code: 'EMAIL_EXISTS', message: 'Email already whitelisted.' } });
       }
       const dept = department ? String(department).trim().toUpperCase() : null;
@@ -297,7 +293,6 @@ router.post('/', csrfProtection, async (req, res) => {
         updatedAt: now,
       };
       const inserted = await col.insertOne(doc);
-      await client.close();
       return res.status(201).json({ data: { id: inserted.insertedId, external_id: externalId, student_id: externalId, name: doc.name, email: doc.email, department: dept, year_or_semester: ysem, section: sec, is_active: true, voting_eligible: true, role: 'STUDENT' } });
     } catch (e) {
       console.error('admin whitelist create failed (mongo):', e);
@@ -380,9 +375,9 @@ router.post('/', csrfProtection, async (req, res) => {
 router.patch('/:id', csrfProtection, async (req, res) => {
   if (isMongoOnly) {
     try {
-      const { MongoClient, ObjectId } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-      await client.connect();
+      const { ObjectId } = require('mongodb');
+      const client = await getSharedClient();
+      if (!client) throw new Error('MongoDB not configured');
       const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       const rawId = req.params.id;
       let existing = null;
@@ -391,19 +386,19 @@ router.patch('/:id', csrfProtection, async (req, res) => {
         try { existing = await col.findOne({ _id: rawId }); } catch {}
       }
       if (!existing && !isNaN(parseInt(rawId, 10))) existing = await col.findOne({ postgresId: parseInt(rawId, 10) });
-      if (!existing) { await client.close(); return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }); }
+      if (!existing) { return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }); }
       const { email, name, department, year_or_semester, section, is_active } = req.body || {};
       const update = {};
       if (email !== undefined) {
-        if (email === null || String(email).trim() === '') { await client.close(); return res.status(400).json({ error: { code: 'INVALID_EMAIL', message: 'Email cannot be empty.' } }); }
+        if (email === null || String(email).trim() === '') { return res.status(400).json({ error: { code: 'INVALID_EMAIL', message: 'Email cannot be empty.' } }); }
         const trimEmail = String(email).trim().toLowerCase();
-        if (!isValidEmail(trimEmail)) { await client.close(); return res.status(400).json({ error: { code: 'INVALID_EMAIL', message: 'Valid email required.' } }); }
+        if (!isValidEmail(trimEmail)) { return res.status(400).json({ error: { code: 'INVALID_EMAIL', message: 'Valid email required.' } }); }
         const dup = await col.findOne({ _id: { $ne: existing._id }, $or: [{ email: trimEmail }, { officialEmail: trimEmail }, { currentLoginEmail: trimEmail }] });
-        if (dup) { await client.close(); return res.status(409).json({ error: { code: 'EMAIL_EXISTS', message: 'Another record already uses this email.' } }); }
+        if (dup) { return res.status(409).json({ error: { code: 'EMAIL_EXISTS', message: 'Another record already uses this email.' } }); }
         update.email = trimEmail; update.officialEmail = trimEmail; update.currentLoginEmail = trimEmail;
       }
       if (name !== undefined) {
-        if (typeof name !== 'string' || name.trim().length < 2) { await client.close(); return res.status(400).json({ error: { code: 'INVALID_NAME', message: 'Name must be at least 2 chars.' } }); }
+        if (typeof name !== 'string' || name.trim().length < 2) { return res.status(400).json({ error: { code: 'INVALID_NAME', message: 'Name must be at least 2 chars.' } }); }
         update.name = String(name).trim();
       }
       if (department !== undefined) update.department = department === null || String(department).trim() === '' ? null : String(department).trim().toUpperCase();
@@ -412,19 +407,18 @@ router.patch('/:id', csrfProtection, async (req, res) => {
         if (section === null || String(section).trim() === '') update.section = null;
         else {
           const s = String(section).trim().toUpperCase();
-          if (s.length > 20) { await client.close(); return res.status(400).json({ error: { code: 'INVALID_SECTION', message: 'Section too long.' } }); }
+          if (s.length > 20) { return res.status(400).json({ error: { code: 'INVALID_SECTION', message: 'Section too long.' } }); }
           update.section = s;
         }
       }
       if (is_active !== undefined) {
-        if (typeof is_active !== 'boolean') { await client.close(); return res.status(400).json({ error: { code: 'INVALID_VALUE', message: 'is_active must be boolean.' } }); }
+        if (typeof is_active !== 'boolean') { return res.status(400).json({ error: { code: 'INVALID_VALUE', message: 'is_active must be boolean.' } }); }
         update.isActive = is_active;
       }
-      if (Object.keys(update).length === 0) { await client.close(); return res.status(400).json({ error: { code: 'NO_CHANGES', message: 'No valid fields to update.' } }); }
+      if (Object.keys(update).length === 0) { return res.status(400).json({ error: { code: 'NO_CHANGES', message: 'No valid fields to update.' } }); }
       update.updatedAt = new Date();
       await col.updateOne({ _id: existing._id }, { $set: update });
       const updatedDoc = await col.findOne({ _id: existing._id });
-      await client.close();
       return res.json({ data: {
         id: updatedDoc._id,
         external_id: updatedDoc.externalId,
@@ -567,9 +561,9 @@ router.patch('/:id', csrfProtection, async (req, res) => {
 router.delete('/:id', csrfProtection, async (req, res) => {
   if (isMongoOnly) {
     try {
-      const { MongoClient, ObjectId } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-      await client.connect();
+      const { ObjectId } = require('mongodb');
+      const client = await getSharedClient();
+      if (!client) throw new Error('MongoDB not configured');
       const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
       const rawId = req.params.id;
       let row = null;
@@ -578,14 +572,12 @@ router.delete('/:id', csrfProtection, async (req, res) => {
         try { row = await col.findOne({ _id: rawId }); } catch {}
       }
       if (!row && !isNaN(parseInt(rawId, 10))) row = await col.findOne({ postgresId: parseInt(rawId, 10) });
-      if (!row) { await client.close(); return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }); }
+      if (!row) { return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }); }
       if (row.passwordHash) {
         await col.updateOne({ _id: row._id }, { $set: { isActive: false, votingEligible: false, updatedAt: new Date() } });
-        await client.close();
         return res.json({ data: { deactivated: true, id: rawId } });
       } else {
         await col.deleteOne({ _id: row._id });
-        await client.close();
         return res.json({ data: { deleted: true, id: rawId } });
       }
     } catch (e) {

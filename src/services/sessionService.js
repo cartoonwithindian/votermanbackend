@@ -9,6 +9,7 @@ const { hashToken } = require('../lib/crypto');
 const { setSessionCookie, clearSessionCookie, SESSION_COOKIE } = require('../lib/cookies');
 const config = require('../config');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 
 // Mongo-only (Atlas M10) in-memory session store when Postgres is disabled
 const isMongoOnly = !process.env.DATABASE_URL && !!process.env.MONGODB_URI;
@@ -31,9 +32,7 @@ async function createSession(res, studentId, mfaVerified = false) {
     memorySessions.set(hashToken(sessionToken), { studentId, bindingHash: hashToken(bindingToken), mfaVerified, expiresAt });
     // Also try Mongo Atlas if available (persistent)
     try {
-      const { MongoClient } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI);
-      await client.connect();
+      const client = await getSharedClient();
       await client.db(getMongoDbName()).collection('sessions').insertOne({
         sessionHash: hashToken(sessionToken),
         bindingHash: hashToken(bindingToken),
@@ -42,7 +41,6 @@ async function createSession(res, studentId, mfaVerified = false) {
         expiresAt: new Date(expiresAt),
         createdAt: new Date(),
       });
-      await client.close();
     } catch {}
     setSessionCookie(res, sessionToken);
     return bindingToken;

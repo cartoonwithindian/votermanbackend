@@ -6,7 +6,7 @@
 
 const db = require('../db');
 const config = require('../config');
-const { getMongoDbName } = require('../utils/mongoDbName');
+const { getDb: getSharedDb } = require('../db/mongoClient');
 
 // Mongo-only (Atlas M10): authenticate against the Mongo students collection.
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
@@ -39,23 +39,18 @@ async function recordAudit(event, { studentId = null, ip = null, metadata = {} }
 async function findStudentByIdentifierOrEmail(identifier) {
   if (isMongoOnly) {
     try {
-      const { MongoClient } = require('mongodb');
-      const client = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL, { serverSelectionTimeoutMS: 4000, connectTimeoutMS: 4000 });
-      await client.connect();
-      try {
-        const identifierTrim = String(identifier || '').trim();
-        const doc = await client.db(getMongoDbName()).collection('students').findOne({
-          $or: [
-            { externalId: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
-            { email: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
-            { currentLoginEmail: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
-            { officialEmail: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
-          ],
-        });
-        return mongoStudentToRow(doc);
-      } finally {
-        await client.close().catch(() => {});
-      }
+      const db = await getSharedDb();
+      if (!db) return null;
+      const identifierTrim = String(identifier || '').trim();
+      const doc = await db.collection('students').findOne({
+        $or: [
+          { externalId: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
+          { email: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
+          { currentLoginEmail: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
+          { officialEmail: { $regex: `^${escapeRegex(identifierTrim)}$`, $options: 'i' } },
+        ],
+      });
+      return mongoStudentToRow(doc);
     } catch (error) {
       console.error('[authDb] Mongo student lookup failed:', error.message);
       return null;

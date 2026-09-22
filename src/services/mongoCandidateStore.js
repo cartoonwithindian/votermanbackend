@@ -8,35 +8,11 @@
  *   {id, name, gender, department, year, section, description/bio, manifesto, image_url, position_id, position_name, election_id, election_name}
  */
 
-const { MongoClient } = require('mongodb');
-const { getMongoDbName } = require('../utils/mongoDbName');
+const { getMongoUri, getDbName, getClient } = require('../db/mongoClient');
 const { normalizeYear } = require('../utils/yearNormalizer');
-
-let client = null;
-let clientPromise = null;
-
-function getMongoUri() {
-  return process.env.MONGODB_URI || process.env.MONGODB_URL || process.env.ATLAS_URI || process.env.ATLAS_URL || null;
-}
-
-function getDbName() {
-  return getMongoDbName();
-}
 
 function getCollectionName() {
   return process.env.MONGODB_COLLECTION || 'candidates';
-}
-
-async function getClient() {
-  const uri = getMongoUri();
-  if (!uri) return null;
-  if (client) return client;
-  if (clientPromise) return clientPromise;
-  clientPromise = new MongoClient(uri).connect().then(c => {
-    client = c;
-    return c;
-  });
-  return clientPromise;
 }
 
 async function getCollection() {

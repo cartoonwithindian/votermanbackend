@@ -23,7 +23,7 @@ const { hashPassword } = require('../lib/password');
 const { createSession } = require('../services/sessionService');
 const { recordAudit, publicUser } = require('../lib/authDb');
 const { requireClerkMiddleware, fetchClerkPrimaryEmail, logVerificationResult } = require('../lib/clerkVerify');
-const { getMongoDbName } = require('../utils/mongoDbName');
+const { getDb: getSharedDb } = require('../db/mongoClient');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 function authError(res, status, code, message) {
@@ -71,10 +71,8 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
     // credential. Priority: current_login_email > legacy email > official_email.
     let account = null;
     if (isMongoOnly) {
-      const { MongoClient } = require('mongodb');
-      const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-      await mclient.connect();
-      const mdb = mclient.db(getMongoDbName());
+      const mdb = await getSharedDb();
+      if (!mdb) throw new Error('MongoDB not configured');
       account = await mdb.collection('students').findOne({
         isActive: true,
         $or: [
@@ -96,7 +94,6 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
           mfa_enabled: account.mfaEnabled,
         };
       }
-      await mclient.close();
     } else {
       account = await db.query(
         `SELECT * FROM students
@@ -119,10 +116,8 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
       // Others get a clear error to contact support team.
       let whitelistCheck = null;
       if (isMongoOnly) {
-        const { MongoClient } = require('mongodb');
-        const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-        await mclient.connect();
-        const mdb = mclient.db(getMongoDbName());
+        const mdb = await getSharedDb();
+        if (!mdb) throw new Error('MongoDB not configured');
         whitelistCheck = await mdb.collection('students').findOne({
           $or: [
             { email: { $regex: `^${email}$`, $options: 'i' } },
@@ -133,7 +128,6 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
         if (whitelistCheck) {
           whitelistCheck = { id: whitelistCheck._id || whitelistCheck.postgresId, is_active: whitelistCheck.isActive };
         }
-        await mclient.close();
       } else {
         whitelistCheck = await db.query(
           `SELECT id, is_active FROM students
@@ -160,15 +154,12 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
       if (whitelistCheck) {
         let pending = null;
         if (isMongoOnly) {
-          const { MongoClient } = require('mongodb');
-          const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-          await mclient.connect();
-          const mdb = mclient.db(getMongoDbName());
+          const mdb = await getSharedDb();
+          if (!mdb) throw new Error('MongoDB not configured');
           pending = await mdb.collection('students').findOne({ _id: whitelistCheck.id }) || await mdb.collection('students').findOne({ postgresId: whitelistCheck.id });
           if (pending) {
             pending = { id: pending._id || pending.postgresId, external_id: pending.externalId, name: pending.name, email: pending.email, role: pending.role, is_active: pending.isActive };
           }
-          await mclient.close();
         } else {
           pending = await db.query(
             `SELECT * FROM students WHERE id = $1`,
@@ -205,10 +196,8 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
 
       let inserted = null;
       if (isMongoOnly) {
-        const { MongoClient } = require('mongodb');
-        const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-        await mclient.connect();
-        const mdb = mclient.db(getMongoDbName());
+        const mdb = await getSharedDb();
+        if (!mdb) throw new Error('MongoDB not configured');
         const newId = Date.now();
         const doc = {
           _id: newId,
@@ -224,7 +213,6 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
           updatedAt: new Date(),
         };
         await mdb.collection('students').insertOne(doc);
-        await mclient.close();
         inserted = { id: doc._id, external_id: doc.externalId, name: doc.name, email: doc.email, role: doc.role, is_active: true };
       } else {
         inserted = await db.query(
@@ -241,12 +229,9 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
       // Bootstrap: promote listed emails to ADMIN on sign-in.
       // Checked FIRST: ADMIN always wins when an email is on both lists.
       if (isMongoOnly) {
-        const { MongoClient } = require('mongodb');
-        const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-        await mclient.connect();
-        const mdb = mclient.db(getMongoDbName());
+        const mdb = await getSharedDb();
+        if (!mdb) throw new Error('MongoDB not configured');
         await mdb.collection('students').updateOne({ _id: account.id }, { $set: { role: 'ADMIN' } });
-        await mclient.close();
         account.role = 'ADMIN';
       } else {
         const promoted = await db.query(
@@ -262,12 +247,9 @@ router.post('/clerk-session', loginLimiter, csrfProtection, requireClerkMiddlewa
       const isCadAllowed = cadList.length > 0 ? cadList.includes(email) : true;
       if (isCadAllowed) {
         if (isMongoOnly) {
-          const { MongoClient } = require('mongodb');
-          const mclient = new MongoClient(process.env.MONGODB_URI || process.env.MONGODB_URL);
-          await mclient.connect();
-          const mdb = mclient.db(getMongoDbName());
+          const mdb = await getSharedDb();
+          if (!mdb) throw new Error('MongoDB not configured');
           await mdb.collection('students').updateOne({ _id: account.id }, { $set: { role: 'CAD' } });
-          await mclient.close();
           account.role = 'CAD';
         } else {
           const promoted = await db.query(

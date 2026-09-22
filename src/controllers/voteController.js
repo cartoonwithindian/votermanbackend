@@ -13,6 +13,8 @@ const db = require('../db');
 const constituencyService = require('../services/constituencyService');
 const { normalizeYear } = require('../utils/yearNormalizer');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { ObjectId } = require('mongodb');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -215,20 +217,13 @@ class VoteController {
           if (req.user?.department && req.user?.year) {
             row = { department: req.user.department, year_or_semester: req.user.year, section: req.user.section || '' };
           } else {
-            const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-            if (uri) {
-              const { MongoClient, ObjectId } = require('mongodb');
-              const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-              await client.connect();
-              try {
-                const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
-                let doc = null;
-                try { if (ObjectId.isValid(String(authenticatedStudentId))) doc = await col.findOne({ _id: new ObjectId(String(authenticatedStudentId)) }); } catch (_) {}
-                if (!doc) doc = await col.findOne({ $or: [{ postgresId: parseInt(authenticatedStudentId) }, { id: String(authenticatedStudentId) }, { _id: String(authenticatedStudentId) }] });
-                if (doc) row = { department: doc.department, year_or_semester: normalizeYear(doc.year || doc.year_or_semester || doc.yearOrSemester), section: doc.section || '' };
-              } finally {
-                await client.close().catch(() => {});
-              }
+            const client = await getSharedClient();
+            if (client) {
+              const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+              let doc = null;
+              try { if (ObjectId.isValid(String(authenticatedStudentId))) doc = await col.findOne({ _id: new ObjectId(String(authenticatedStudentId)) }); } catch (_) {}
+              if (!doc) doc = await col.findOne({ $or: [{ postgresId: parseInt(authenticatedStudentId) }, { id: String(authenticatedStudentId) }, { _id: String(authenticatedStudentId) }] });
+              if (doc) row = { department: doc.department, year_or_semester: normalizeYear(doc.year || doc.year_or_semester || doc.yearOrSemester), section: doc.section || '' };
             }
           }
         } catch (e) {
@@ -312,19 +307,12 @@ class VoteController {
       if (isMongoOnly) {
         // Mongo-only: try Mongo vote_receipts collection, else 404 (not 500)
         try {
-          const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-          if (uri) {
-            const { MongoClient } = require('mongodb');
-            const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-            await client.connect();
-            try {
-              const col = client.db(getMongoDbName()).collection('vote_receipts');
-              const doc = await col.findOne({ $or: [{ student_id: parseInt(authenticatedStudentId), election_id: parseInt(electionIdInt) }, { studentId: parseInt(authenticatedStudentId), electionId: parseInt(electionIdInt) }] }, { sort: { created_at: -1, createdAt: -1 } });
-              if (doc) {
-                return res.json({ data: { receipt: { receiptId: doc._id ? String(doc._id) : doc.id, receiptHash: doc.receipt_hash ?? doc.receiptHash, nullifier: doc.nullifier, createdAt: doc.created_at ?? doc.createdAt } } });
-              }
-            } finally {
-              await client.close().catch(() => {});
+          const client = await getSharedClient();
+          if (client) {
+            const col = client.db(getMongoDbName()).collection('vote_receipts');
+            const doc = await col.findOne({ $or: [{ student_id: parseInt(authenticatedStudentId), election_id: parseInt(electionIdInt) }, { studentId: parseInt(authenticatedStudentId), electionId: parseInt(electionIdInt) }] }, { sort: { created_at: -1, createdAt: -1 } });
+            if (doc) {
+              return res.json({ data: { receipt: { receiptId: doc._id ? String(doc._id) : doc.id, receiptHash: doc.receipt_hash ?? doc.receiptHash, nullifier: doc.nullifier, createdAt: doc.created_at ?? doc.createdAt } } });
             }
           }
         } catch (e) {
@@ -400,30 +388,23 @@ class VoteController {
       if (isMongoOnly) {
         // Mongo-only: try Mongo votes + receipts collections, avoid Postgres 500
         try {
-          const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-          if (uri) {
-            const { MongoClient, ObjectId } = require('mongodb');
-            const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-            await client.connect();
-            try {
-              const votesCol = client.db(getMongoDbName()).collection('votes');
-              let vote = null;
-              try { if (ObjectId.isValid(String(voteIdInt))) vote = await votesCol.findOne({ _id: new ObjectId(String(voteIdInt)) }); } catch (_) {}
-              if (!vote) vote = await votesCol.findOne({ $or: [{ _id: String(voteIdInt) }, { id: String(voteIdInt) }] });
-              if (!vote) return res.status(404).json({ error: 'Not Found', message: 'Vote not found.', code: 'VOTE_NOT_FOUND' });
-              const vidStudent = vote.student_id ?? vote.studentId;
-              if (parseInt(vidStudent) !== parseInt(authenticatedStudentId)) return res.status(403).json({ error: 'Forbidden', message: 'Cannot access another student\'s vote receipt.', code: 'ACCESS_DENIED' });
-              const recCol = client.db(getMongoDbName()).collection('vote_receipts');
-              let rec = null;
-              try { if (ObjectId.isValid(String(voteIdInt))) rec = await recCol.findOne({ vote_id: vote._id }); } catch (_) {}
-              if (!rec) rec = await recCol.findOne({ $or: [{ vote_id: String(voteIdInt) }, { voteId: String(voteIdInt) }, { vote_id: voteIdInt }] });
-              let receipt;
-              if (rec) receipt = { receiptId: rec._id ? String(rec._id) : rec.id, receiptHash: rec.receipt_hash ?? rec.receiptHash, nullifier: rec.nullifier, createdAt: rec.created_at ?? rec.createdAt };
-              else receipt = await voteService.generateReceipt(vote._id ? String(vote._id) : voteIdInt, electionIdInt, vidStudent);
-              return res.json({ data: { receipt } });
-            } finally {
-              await client.close().catch(() => {});
-            }
+          const client = await getSharedClient();
+          if (client) {
+            const votesCol = client.db(getMongoDbName()).collection('votes');
+            let vote = null;
+            try { if (ObjectId.isValid(String(voteIdInt))) vote = await votesCol.findOne({ _id: new ObjectId(String(voteIdInt)) }); } catch (_) {}
+            if (!vote) vote = await votesCol.findOne({ $or: [{ _id: String(voteIdInt) }, { id: String(voteIdInt) }] });
+            if (!vote) return res.status(404).json({ error: 'Not Found', message: 'Vote not found.', code: 'VOTE_NOT_FOUND' });
+            const vidStudent = vote.student_id ?? vote.studentId;
+            if (parseInt(vidStudent) !== parseInt(authenticatedStudentId)) return res.status(403).json({ error: 'Forbidden', message: 'Cannot access another student\'s vote receipt.', code: 'ACCESS_DENIED' });
+            const recCol = client.db(getMongoDbName()).collection('vote_receipts');
+            let rec = null;
+            try { if (ObjectId.isValid(String(voteIdInt))) rec = await recCol.findOne({ vote_id: vote._id }); } catch (_) {}
+            if (!rec) rec = await recCol.findOne({ $or: [{ vote_id: String(voteIdInt) }, { voteId: String(voteIdInt) }, { vote_id: voteIdInt }] });
+            let receipt;
+            if (rec) receipt = { receiptId: rec._id ? String(rec._id) : rec.id, receiptHash: rec.receipt_hash ?? rec.receiptHash, nullifier: rec.nullifier, createdAt: rec.created_at ?? rec.createdAt };
+            else receipt = await voteService.generateReceipt(vote._id ? String(vote._id) : voteIdInt, electionIdInt, vidStudent);
+            return res.json({ data: { receipt } });
           }
         } catch (e) {
           console.warn('voteController.getReceipt mongo fallback failed:', e.message);

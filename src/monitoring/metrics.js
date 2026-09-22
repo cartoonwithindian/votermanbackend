@@ -39,7 +39,7 @@
 
 const client = require('prom-client');
 const crypto = require('node:crypto');
-const { getMongoDbName } = require('../utils/mongoDbName');
+const { getDb: getSharedDb } = require('../db/mongoClient');
 
 // ---------------------------------------------------------------------------
 // Registry + default Node metrics (idempotent init)
@@ -245,22 +245,16 @@ async function refreshBusinessMetrics() {
   const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
   if (isMongoOnly) {
     try {
-      const { MongoClient } = require('mongodb');
-      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-      if (uri) {
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
-        try {
-          const dbName = getMongoDbName();
-          const [electionsCount, studentsCount, appsCount] = await Promise.all([
-            client.db(dbName).collection('elections').countDocuments({ status: 'OPEN' }).catch(() => 0),
-            client.db(dbName).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students').countDocuments({ $or: [{ role: 'STUDENT' }, { role: { $exists: false } }] }).catch(() => 0),
-            client.db(dbName).collection('candidate_applications').countDocuments({}).catch(() => 0),
-          ]);
-          activeElections.set(electionsCount || 0);
-          registeredStudentsTotal.set(studentsCount || 0);
-          candidateApplicationsTotal.set(appsCount || 0);
-        } finally { await client.close().catch(() => {}); }
+      const db = await getSharedDb();
+      if (db) {
+        const [electionsCount, studentsCount, appsCount] = await Promise.all([
+          db.collection('elections').countDocuments({ status: 'OPEN' }).catch(() => 0),
+          db.collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students').countDocuments({ $or: [{ role: 'STUDENT' }, { role: { $exists: false } }] }).catch(() => 0),
+          db.collection('candidate_applications').countDocuments({}).catch(() => 0),
+        ]);
+        activeElections.set(electionsCount || 0);
+        registeredStudentsTotal.set(studentsCount || 0);
+        candidateApplicationsTotal.set(appsCount || 0);
         return;
       }
     } catch (e) {
@@ -423,13 +417,9 @@ async function buildMonitoringSummary() {
   const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
   if (isMongoOnly) {
     try {
-      const { MongoClient } = require('mongodb');
-      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-      if (uri) {
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
-        await client.db(getMongoDbName()).command({ ping: 1 });
-        await client.close().catch(() => {});
+      const db = await getSharedDb();
+      if (db) {
+        await db.command({ ping: 1 });
         dbConnected = true;
       } else {
         dbConnected = false;

@@ -7,6 +7,7 @@ const studentService = require('../services/studentService');
 const candidateService = require('../services/candidateService');
 const { recordAudit } = require('../lib/authDb');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 
 // Derive department / year-or-semester / section from a student_id like:
 //   "BBA-A1-3SEM-030" -> { BBA, A1, 3 Sem }
@@ -453,17 +454,13 @@ class StudentController {
       }
       // Mongo-only: try to bulk update Mongo students collection, otherwise mock
       try {
-        const { MongoClient } = require('mongodb');
-        const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-        if (uri) {
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
+        const client = await getSharedClient();
+        if (client) {
           const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
           const filter = {};
           if (req.body.role && typeof req.body.role === 'string') filter.role = req.body.role;
           if (typeof req.body.is_active === 'boolean') filter.isActive = req.body.is_active;
           const result = await col.updateMany(filter, { $set: { votingEligible: voting_eligible, voting_eligible, updatedAt: new Date(), updated_at: new Date() } });
-          await client.close().catch(() => {});
           return res.json({ data: { updated: result.modifiedCount || 0, voting_eligible } });
         }
       } catch (e) {

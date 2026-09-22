@@ -11,6 +11,7 @@ const electionController = require('../controllers/electionController');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { csrfProtection } = require('../middleware/csrfProtection');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { getClient: getSharedClient } = require('../db/mongoClient');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 // GET /api/v1/admin/elections - List all elections (admin only)
@@ -40,17 +41,14 @@ router.get('/:id/turnout', requireAdmin, async (req, res) => {
     // Mongo-only mode: avoid Postgres queries that throw 500
     // Try to read election from voteweb.elections, otherwise return empty turnout
     try {
-      const { MongoClient, ObjectId } = require('mongodb');
-      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
-      if (uri) {
-        const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-        await client.connect();
+      const { ObjectId } = require('mongodb');
+      const client = await getSharedClient();
+      if (client) {
         const col = client.db(getMongoDbName()).collection('elections');
         const eid = parseInt(req.params.id, 10);
         let doc = null;
         try { if (ObjectId.isValid(String(eid))) doc = await col.findOne({ _id: new ObjectId(String(eid)) }); } catch (_) {}
         if (!doc) doc = await col.findOne({ $or: [{ postgresId: eid }, { id: eid }] });
-        await client.close();
         if (doc) {
           return res.json({ data: { election: { id: doc._id || doc.id || doc.postgresId, name: doc.name, status: doc.status || 'DRAFT' }, totals: { total_authorized: 0, total_voted: 0, total_pending: 0, participation_pct: 0 }, classes: [] } });
         }
