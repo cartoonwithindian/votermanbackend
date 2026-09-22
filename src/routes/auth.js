@@ -72,7 +72,7 @@ router.get('/me', loadSession, (req, res) => {
 // The account is created bare by the Clerk bridge; dashboards require
 // these fields before the student can vote or apply as a candidate.
 // =====================================================
-const PROFILE_COURSES = ['BBA', 'BCA', 'BCom', 'MBA', 'MCA'];
+const PROFILE_COURSES = ['BBA', 'BCA', 'BCom', 'MBA', 'MCA', 'TEST'];
 const PROFILE_YEARS = ['1st Year', '2nd Year', '3rd Year', '1 Sem', '3 Sem', '5 Sem'];
 
 router.post('/profile', loadSession, requireAuth, csrfProtection, async (req, res) => {

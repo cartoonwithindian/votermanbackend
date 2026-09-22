@@ -12,6 +12,7 @@
     "migrate:down": "node migrate.js down",
     "migrate:reset": "node migrate.js reset",
     "db:restore": "node scripts/restore-backup.js",
+    "import:students": "node scripts/import_students.js",
     "seed": "node seed.js"
   },
   "keywords": [

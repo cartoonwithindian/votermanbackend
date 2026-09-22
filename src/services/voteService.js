@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const { incVotesCast } = require('../monitoring/metrics');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getClient: getSharedClient } = require('../db/mongoClient');
+const { normalizeYear } = require('../utils/yearNormalizer');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -306,9 +307,10 @@ class VoteService {
 
     const voter = voterIdentity.rows[0];
     const match = (a, b) => (a ?? '').toString().trim().toLowerCase() === (b ?? '').toString().trim().toLowerCase();
+    const matchYear = (a, b) => match(normalizeYear(a), normalizeYear(b));
 
     if (!match(constituency.department, voter.department) ||
-        !match(constituency.year, voter.year_or_semester) ||
+        !matchYear(constituency.year, voter.year_or_semester) ||
         !match(constituency.section, voter.section)) {
       return {
         success: false,

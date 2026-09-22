@@ -46,3 +46,5 @@ DEV-ACCOUNT.md
 .env
 .env.*
 *.local
+
+backups/
