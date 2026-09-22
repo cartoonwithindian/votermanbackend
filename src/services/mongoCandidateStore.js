@@ -10,6 +10,7 @@
 
 const { MongoClient } = require('mongodb');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const { normalizeYear } = require('../utils/yearNormalizer');
 
 let client = null;
 let clientPromise = null;
@@ -103,12 +104,23 @@ async function deleteMongoCandidates() {
   return res.deletedCount;
 }
 
+function normYear(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return s;
+  return normalizeYear(s);
+}
+
+function normSec(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  return (s === '-' || s === '?' || s === '') ? '' : s;
+}
+
 function filterMongoRows(rows, { gender, department, year, section, limit = 100, offset = 0 }) {
   let filtered = [...rows];
-  if (gender && gender !== 'all') filtered = filtered.filter(r => r.gender === gender);
-  if (department && department !== 'all') filtered = filtered.filter(r => r.department === department);
-  if (year && year !== 'all') filtered = filtered.filter(r => r.year === year);
-  if (section && section !== 'all') filtered = filtered.filter(r => r.section === section);
+  if (gender && gender !== 'all') filtered = filtered.filter(r => String(r.gender ?? '').toLowerCase() === String(gender).toLowerCase());
+  if (department && department !== 'all') filtered = filtered.filter(r => String(r.department ?? '').trim().toLowerCase() === String(department).trim().toLowerCase());
+  if (year && year !== 'all') filtered = filtered.filter(r => normYear(r.year) === normYear(year));
+  if (section && section !== 'all') filtered = filtered.filter(r => normSec(r.section) === normSec(section));
   const total = filtered.length;
   filtered = filtered.slice(offset, offset + limit);
   return { rows: filtered, total };

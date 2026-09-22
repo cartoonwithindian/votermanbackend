@@ -166,9 +166,9 @@ class CandidateController {
   async update(req, res, next) {
     try {
       const { id } = req.params;
-      const { name, description, image_url, display_order } = req.body;
+      const { name, description, image_url, display_order, department, year, section, gender } = req.body;
 
-      if (!id || isNaN(parseInt(id))) {
+      if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid candidate ID',
@@ -176,7 +176,7 @@ class CandidateController {
       }
 
       // Check election state - only allow modification in DRAFT/SCHEDULED
-      const canModify = await candidateService.canModify(parseInt(id));
+      const canModify = await candidateService.canModify(isMongoOnly ? id : parseInt(id));
       if (!canModify) {
         return res.status(403).json({
           error: 'Forbidden',
@@ -184,11 +184,15 @@ class CandidateController {
         });
       }
 
-      const candidate = await candidateService.update(parseInt(id), {
+      const candidate = await candidateService.update(isMongoOnly ? id : parseInt(id), {
         name,
         description,
         image_url,
         display_order,
+        department,
+        year,
+        section,
+        gender,
       });
 
       res.json({ data: candidate });
@@ -222,6 +226,7 @@ class CandidateController {
       if (err) return res.status(400).json({ error: 'Bad Request', message: err, code: 'VALIDATION_ERROR' });
       const mapped = arr.map((c, i) => jsonStore.mapJsonToRow(c, i));
       const saved = jsonStore.writeJsonCandidates(arr);
+      await candidateService.invalidateCandidates();
       return res.json({ success: true, message: `Uploaded ${arr.length} candidates from JSON`, count: arr.length, path: saved.path, preview: mapped.slice(0, 2) });
     } catch (e) { next(e); }
   }
@@ -237,6 +242,7 @@ class CandidateController {
   async deleteJson(req, res, next) {
     try {
       const deleted = jsonStore.deleteJsonCandidates();
+      await candidateService.invalidateCandidates();
       return res.json({ success: true, deleted, message: deleted ? 'JSON override removed, DB is now active' : 'No JSON to delete' });
     } catch (e) { next(e); }
   }

@@ -12,10 +12,49 @@ const jsonStore = require('./jsonCandidateStore');
 const mongoStore = require('./mongoCandidateStore');
 const { normalizeYear } = require('../utils/yearNormalizer');
 const { getMongoDbName } = require('../utils/mongoDbName');
+const redisCache = require('../utils/redisCache');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
+const CANDIDATES_CACHE_KEY_PREFIX = 'candidates:v1:';
+const CANDIDATES_CACHE_TTL = 60;
+
 class CandidateService {
+  /**
+   * Attach position_name to ballot candidate docs by joining the `positions`
+   * collection once. Ballot rows created via add-to-ballot store position_id
+   * only; students and admin UIs render position_name.
+   */
+  async enrichPositionNames(rows) {
+    if (!rows || !rows.length) return rows;
+    const missing = rows.some(r => !(r.position_name || r.position));
+    if (!missing) return rows;
+    const { MongoClient } = require('mongodb');
+    const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+    if (!uri) return rows;
+    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+    try {
+      await client.connect();
+      const positions = await client.db(getMongoDbName()).collection('positions').find({}).toArray();
+      const byId = new Map();
+      for (const p of positions) {
+        byId.set(String(p._id), p);
+        if (p.postgresId != null) byId.set(String(p.postgresId), p);
+      }
+      return rows.map(r => {
+        if (r.position_name || r.position) return r;
+        const pos = byId.get(String(r.position_id ?? r.positionId ?? ''));
+        if (!pos) return r;
+        return { ...r, position_id: r.position_id ?? pos._id ? String(pos._id) : r.position_id, position_name: pos.name };
+      });
+    } catch (e) {
+      console.warn('[candidateService] enrichPositionNames failed:', e.message);
+      return rows;
+    } finally {
+      await client.close().catch(() => {});
+    }
+  }
+
   /**
    * Find all APPROVED candidates for public/student view.
    * Uses candidate_applications with status='approved'.
@@ -29,6 +68,31 @@ class CandidateService {
    * @param {string} options.section - Filter by section
    */
   async findApproved(options = {}) {
+    const cacheKey = redisCache.isEnabled() ? this.buildCandidateCacheKey(options) : null;
+    if (cacheKey) {
+      const cached = await redisCache.getKey(cacheKey);
+      if (cached !== null) {
+        return Array.isArray(cached) ? cached : [];
+      }
+    }
+    const rows = await this._loadApprovedRows(options);
+    if (cacheKey) {
+      await redisCache.setKey(cacheKey, rows, CANDIDATES_CACHE_TTL);
+    }
+    return rows;
+  }
+
+  buildCandidateCacheKey(options = {}) {
+    const version = process.env.CANDIDATES_CACHE_VERSION || '1';
+    const safe = (v) => String(v ?? '').trim().toLowerCase() !== '' ? String(v).trim().toLowerCase() : 'all';
+    return `${CANDIDATES_CACHE_KEY_PREFIX}${version}:${safe(options.gender)}:${safe(options.department)}:${safe(options.year)}:${safe(options.section)}:${options.limit ?? 100}:${options.offset ?? 0}`;
+  }
+
+  async invalidateCandidates() {
+    await redisCache.deleteKeysWithPrefix(CANDIDATES_CACHE_KEY_PREFIX);
+  }
+
+  async _loadApprovedRows(options = {}) {
     const {
       limit = 100,
       offset = 0,
@@ -44,8 +108,9 @@ class CandidateService {
       if (await mongoStore.hasMongoCandidates()) {
         const mongoRows = await mongoStore.readMongoCandidates();
         if (mongoRows && mongoRows.length) {
+          const enriched = await this.enrichPositionNames(mongoRows);
           // mongo docs already mapped to CandidateRow via jsonStore.mapJsonToRow on write
-          const { rows } = mongoStore.filterMongoRows(mongoRows, { gender, department, year, section, limit, offset });
+          const { rows } = mongoStore.filterMongoRows(enriched, { gender, department, year, section, limit, offset });
           return rows;
         }
       }
@@ -143,7 +208,8 @@ class CandidateService {
       if (await mongoStore.hasMongoCandidates()) {
         const mongoRows = await mongoStore.readMongoCandidates();
         if (mongoRows && mongoRows.length) {
-          const found = mongoRows.find(r => String(r._id) === String(id) || String(r.id) === String(id));
+          const enriched = await this.enrichPositionNames(mongoRows);
+          const found = enriched.find(r => String(r._id) === String(id) || String(r.id) === String(id));
           if (found) return found;
         }
       }
@@ -431,6 +497,7 @@ class CandidateService {
             if (!res || !res.value) res = await col.findOneAndDelete({ $or: [{ id: String(id) }, { _id: String(id) }] });
             if (!res || !res.value) return null;
             const d = res.value;
+            await this.invalidateCandidates();
             return { id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, department: d.department ?? null, year: d.year ?? null, section: d.section ?? null, gender: d.gender ?? null, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true };
           } finally {
             await client.close().catch(() => {});
@@ -445,6 +512,7 @@ class CandidateService {
       'DELETE FROM candidates WHERE id = $1 RETURNING *',
       [id]
     );
+    await this.invalidateCandidates();
     return result.rows[0] || null;
   }
 
@@ -535,6 +603,7 @@ class CandidateService {
             const col = client.db(getMongoDbName()).collection('candidates');
             const doc = { position_id, positionId: position_id, name, description: description ?? manifest, image_url: image_url, imageUrl: image_url, department: department ?? null, year: year ?? null, section: section ?? null, gender: gender ?? null, display_order: 1, displayOrder: 1, is_active: true, isActive: true, created_at: new Date(), createdAt: new Date() };
             const res = await col.insertOne(doc);
+            await this.invalidateCandidates();
             return { id: String(res.insertedId), position_id, name, description: description ?? manifest, image_url, department, year, section, gender, display_order: 1, is_active: true };
           } finally {
             await client.close().catch(() => {});
@@ -553,6 +622,7 @@ class CandidateService {
        RETURNING *`,
       [position_id, name, description, image_url]
     );
+    await this.invalidateCandidates();
     return result.rows[0];
   }
 
@@ -581,14 +651,19 @@ class CandidateService {
             const upd = {};
             if (data.name !== undefined) upd.name = data.name;
             if (data.description !== undefined) upd.description = data.description;
-            if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl = data.image_url; }
-            if (data.display_order !== undefined) { upd.display_order = data.display_order; upd.displayOrder = data.display_order; }
+if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl = data.image_url; }
+        if (data.display_order !== undefined) { upd.display_order = data.display_order; upd.displayOrder = data.display_order; }
+        if (data.department !== undefined) upd.department = data.department;
+        if (data.year !== undefined) upd.year = data.year;
+        if (data.section !== undefined) upd.section = data.section;
+        if (data.gender !== undefined) upd.gender = data.gender;
             upd.updated_at = new Date(); upd.updatedAt = new Date();
             let res = null;
             try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: upd }, { returnDocument: 'after' }); } catch (_) {}
             if (!res || !res.value) res = await col.findOneAndUpdate({ id: String(id) }, { $set: upd }, { returnDocument: 'after' });
             if (res && res.value) {
               const d = res.value;
+              await this.invalidateCandidates();
               return { id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0 };
             }
           } finally {
@@ -614,6 +689,7 @@ class CandidateService {
       RETURNING *
     `, [id, name, description, image_url, display_order]);
 
+    await this.invalidateCandidates();
     return result.rows[0];
   }
 }

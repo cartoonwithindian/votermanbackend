@@ -393,7 +393,7 @@ app.use((err, req, res, next) => {
   // Default error response
   res.status(err.status || 500).json({
     error: err.status === 404 ? 'Not Found' : 'Internal Server Error',
-    message: err.message,
+    message: isDev ? err.message : 'An unexpected error occurred.',
     code: err.code || 'INTERNAL_ERROR',
   });
 });

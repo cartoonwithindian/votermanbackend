@@ -295,32 +295,115 @@ class CandidateApplicationService {
    */
   async listForAdmin(filters = {}) {
     if (isMongoOnly) {
-      try {
-        const uri = getMongoUri();
-        if (uri) {
-          const { MongoClient } = require('mongodb');
-          const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
-          await client.connect();
-          try {
-            const col = client.db(getMongoDbName()).collection('candidate_applications');
-            const filter = {};
-            if (filters.status && filters.status !== 'all') filter.status = filters.status;
-            if (filters.department && filters.department !== 'all') filter.department = filters.department;
-            if (filters.positionId && filters.positionId !== 'all') filter.position_id = parseInt(filters.positionId);
-            let docs = await col.find(filter).sort({ submitted_at: -1, createdAt: -1 }).skip(parseInt(filters.offset) || 0).limit(Math.min(parseInt(filters.limit) || 100, 100)).toArray();
-            if (filters.search) {
-              const term = String(filters.search).toLowerCase();
-              docs = docs.filter(d => String(d.full_name || d.fullName || '').toLowerCase().includes(term) || String(d.enrollment_number || '').toLowerCase().includes(term) || String(d.email || '').toLowerCase().includes(term));
+try {
+          const uri = getMongoUri();
+          if (uri) {
+            const { MongoClient } = require('mongodb');
+            const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+            await client.connect();
+            try {
+            const db = client.db(getMongoDbName());
+            const col = db.collection('candidate_applications');
+            let docs = [];
+            try {
+              const filter = {};
+              if (filters.status && filters.status !== 'all') filter.status = filters.status;
+              if (filters.department && filters.department !== 'all') filter.department = filters.department;
+              if (filters.positionId && filters.positionId !== 'all') filter.position_id = filters.positionId;
+              docs = await col.find(filter).sort({ submitted_at: -1, createdAt: -1 }).toArray();
+            } catch (_) { docs = []; }
+// When no self-applications exist, serve the live ballot
+            // (`candidates` collection) so admin positions/candidates pages
+            // reflect the standing roster instead of an empty table.
+            if (!docs.length) {
+              const candidatesCol = db.collection('candidates');
+              const positionsCol = db.collection('positions');
+              const constituentsCol = db.collection('constituencies');
+              const electionsCol = db.collection('elections');
+              let ballotDocs = await candidatesCol.find({}).toArray();
+              const positionDocs = await positionsCol.find({}).toArray();
+              const constituentDocs = await constituentsCol.find({}).toArray();
+              const electionDocs = await electionsCol.find({}).toArray();
+              const positionById = new Map();
+              for (const p of positionDocs) {
+                positionById.set(String(p._id), p);
+                if (p.postgresId != null) positionById.set(String(p.postgresId), p);
+              }
+              const constituentById = new Map();
+              for (const ct of constituentDocs) {
+                constituentById.set(String(ct._id), ct);
+                if (ct.postgresId != null) constituentById.set(String(ct.postgresId), ct);
+              }
+              const electionById = new Map();
+              for (const e of electionDocs) {
+                electionById.set(String(e._id), e);
+                if (e.postgresId != null) electionById.set(String(e.postgresId), e);
+              }
+              const openElectionIds = new Set();
+              for (const e of electionDocs) {
+                if (['OPEN', 'DRAFT', 'SCHEDULED'].includes(String(e.status || '').toUpperCase())) {
+                  openElectionIds.add(String(e._id));
+                  if (e.postgresId != null) openElectionIds.add(String(e.postgresId));
+                }
+              }
+              ballotDocs = ballotDocs.filter(doc => {
+                const pos = positionById.get(String(doc.position_id ?? doc.positionId ?? ''));
+                if (!pos) return false;
+                const ct = constituentById.get(String(pos.constituency_id ?? pos.constituencyId ?? ''));
+                if (!ct) return false;
+                const eid = ct.election_id ?? ct.electionId;
+                return openElectionIds.has(String(eid));
+              });
+              docs = ballotDocs.map(doc => {
+                  const pos = positionById.get(String(doc.position_id ?? doc.positionId ?? ''));
+                  const status = 'approved';
+                  const row = {
+                    _id: doc._id,
+                    student_id: null,
+                    full_name: doc.name,
+                    enrollment_number: null,
+                    department: doc.department,
+                    year: doc.year,
+                    semester: null,
+                    section: doc.section,
+                    position_id: doc.position_id ?? doc.positionId,
+                    contesting_position: pos ? (pos.name) : (doc.position_name || null),
+                    email: null,
+                    phone: null,
+                    profile_photo_url: doc.image_url ?? doc.imageUrl,
+                    bio: null,
+                    manifesto: doc.description || doc.manifesto || '',
+                    age: null,
+                    date_of_birth: null,
+                    gender: doc.gender,
+                    aadhar_number: null,
+                    category: 'CR',
+                    election_id: null,
+                    status,
+                    rejection_reason: null,
+                    changes_requested_reason: null,
+                    reviewed_by: null,
+                    submitted_at: null,
+                    created_at: doc.created_at ?? doc.createdAt,
+                    updated_at: doc.updated_at ?? doc.updatedAt,
+                  };
+                  return row;
+                });
             }
-            return docs.map(row => {
-              const mapped = { id: row._id ? String(row._id) : row.id, student_id: row.student_id ?? row.studentId, full_name: row.full_name ?? row.fullName, enrollment_number: row.enrollment_number ?? row.enrollmentNumber, department: row.department, year: row.year, semester: row.semester, section: row.section, position_id: row.position_id ?? row.positionId, contesting_position: row.contesting_position ?? row.contestingPosition, email: row.email, phone: row.phone, profile_photo_url: row.profile_photo_url ?? row.profilePhotoUrl, bio: row.bio, manifesto: row.manifesto, age: row.age, date_of_birth: row.date_of_birth ?? row.dateOfBirth, gender: row.gender, aadhar_number: row.aadhar_number ?? row.aadharNumber, category: row.category || 'CR', election_id: row.election_id ?? row.electionId, status: row.status, rejection_reason: row.rejection_reason, changes_requested_reason: row.changes_requested_reason, reviewed_by: row.reviewed_by, submitted_at: row.submitted_at ?? row.created_at, created_at: row.created_at, updated_at: row.updated_at };
-              return this.formatApplication(mapped);
-            });
-          } finally {
-            await client.close().catch(() => {});
+              if (filters.search) {
+                const term = String(filters.search).toLowerCase();
+                docs = docs.filter(d => String(d.full_name || d.fullName || '').toLowerCase().includes(term) || String(d.enrollment_number || '').toLowerCase().includes(term) || String(d.email || '').toLowerCase().includes(term));
+              }
+              const mapped = docs.map(row => {
+                const mappedRow = { id: row._id ? String(row._id) : row.id, student_id: row.student_id ?? row.studentId, full_name: row.full_name ?? row.fullName, enrollment_number: row.enrollment_number ?? row.enrollmentNumber, department: row.department, year: row.year, semester: row.semester, section: row.section, position_id: row.position_id ?? row.positionId, contesting_position: row.contesting_position ?? row.contestingPosition, email: row.email, phone: row.phone, profile_photo_url: row.profile_photo_url ?? row.profilePhotoUrl, bio: row.bio, manifesto: row.manifesto, age: row.age, date_of_birth: row.date_of_birth ?? row.dateOfBirth, gender: row.gender, aadhar_number: row.aadhar_number ?? row.aadharNumber, category: row.category || 'CR', election_id: row.election_id ?? row.electionId, status: row.status || 'under_review', rejection_reason: row.rejection_reason, changes_requested_reason: row.changes_requested_reason, reviewed_by: row.reviewed_by, submitted_at: row.submitted_at ?? row.created_at, created_at: row.created_at, updated_at: row.updated_at, position_name: row.contesting_position ?? row.position_name };
+                return this.formatApplication(mappedRow);
+              });
+              return mapped;
+            } finally {
+              await client.close().catch(() => {});
+            }
           }
-        }
-      } catch (e) {
+        } catch (e) {
         console.warn('[candidateApplicationService] listForAdmin mongo fallback to []:', e.message);
       }
       return [];
@@ -687,6 +770,7 @@ class CandidateApplicationService {
       }
     }
 
+    await candidateService.invalidateCandidates();
     return this.formatApplication(result.rows[0]);
   }
 
@@ -883,6 +967,7 @@ class CandidateApplicationService {
       }
     }
 
+    await candidateService.invalidateCandidates();
     return this.formatApplication(result.rows[0]);
   }
 
