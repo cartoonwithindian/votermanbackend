@@ -56,6 +56,85 @@ class CandidateService {
   }
 
   /**
+   * Restrict ballot rows to positions whose parent election is OPEN/DRAFT/
+   * SCHEDULED, so stale rows sitting on CLOSED/orphan positions don't leak
+   * into the public student list. Uses the same positions→constituencies→
+   * elections join as the admin list.
+   */
+  async filterOpenElectionRows(rows) {
+    if (!rows || !rows.length) return rows;
+    try {
+      const { MongoClient } = require('mongodb');
+      const uri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+      if (!uri) return rows;
+      const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2000, connectTimeoutMS: 2000 });
+      try {
+        await client.connect();
+        const dbc = client.db(getMongoDbName());
+        const [positionDocs, constituentDocs, electionDocs] = await Promise.all([
+          dbc.collection('positions').find({}).toArray(),
+          dbc.collection('constituencies').find({}).toArray(),
+          dbc.collection('elections').find({}).toArray(),
+        ]);
+        const positionById = new Map();
+        for (const p of positionDocs) {
+          positionById.set(String(p._id), p);
+          if (p.postgresId != null) positionById.set(String(p.postgresId), p);
+        }
+        const constituentById = new Map();
+        for (const ct of constituentDocs) {
+          constituentById.set(String(ct._id), ct);
+          if (ct.postgresId != null) constituentById.set(String(ct.postgresId), ct);
+        }
+        const electionStatus = new Map();
+        for (const e of electionDocs) {
+          electionStatus.set(String(e._id), String(e.status || '').toUpperCase());
+          if (e.postgresId != null) electionStatus.set(String(e.postgresId), String(e.status || '').toUpperCase());
+        }
+        const open = ['OPEN', 'DRAFT', 'SCHEDULED'];
+        return rows.filter(r => {
+          const pos = positionById.get(String(r.position_id ?? r.positionId ?? ''));
+          if (!pos) return false;
+          const ct = constituentById.get(String(pos.constituency_id ?? pos.constituencyId ?? ''));
+          if (!ct) return false;
+          return open.includes(electionStatus.get(String(ct.election_id ?? ct.electionId ?? '')) || '');
+        });
+      } finally {
+        await client.close().catch(() => {});
+      }
+    } catch (e) {
+      console.warn('[candidateService] filterOpenElectionRows failed, keeping rows:', e.message);
+      return rows;
+    }
+  }
+
+  /**
+   * Map raw Mongo ballot rows to the CandidateRow shape the frontend expects.
+   * Ballot docs store `_id`, `name`, `position_name`, `description`,
+   * `image_url`/`imageUrl`, `department`, `year`, `section`, `gender`.
+   * The frontend CandidateRow needs `id`, `manifesto`, `election_id`,
+   * `election_name` — supply safe defaults so cards/profile links work.
+   */
+  mapBallotRow(rows) {
+    return (rows || []).map(r => ({
+      id: r.id != null ? r.id : (r._id != null ? String(r._id) : r.postgresId),
+      student_id: r.student_id != null ? r.student_id : null,
+      name: r.name || '',
+      gender: r.gender || 'Other',
+      department: r.department || '',
+      year: r.year || '',
+      section: r.section != null && r.section !== '-' ? r.section : null,
+      description: r.description || r.manifesto || r.bio || '',
+      manifesto: r.manifesto || '',
+      image_url: r.image_url ?? r.imageUrl ?? r.profilePhotoUrl ?? null,
+      position_id: r.position_id != null ? r.position_id : (r.positionId != null ? r.positionId : null),
+      position_name: r.position_name || r.position || 'Class Representative',
+      election_id: r.election_id != null ? r.election_id : (r.electionId != null ? r.electionId : null),
+      election_name: r.election_name || r.electionName || 'Student Council Election',
+    }));
+  }
+
+  /**
    * Find all APPROVED candidates for public/student view.
    * Uses candidate_applications with status='approved'.
    *
@@ -109,8 +188,13 @@ class CandidateService {
         const mongoRows = await mongoStore.readMongoCandidates();
         if (mongoRows && mongoRows.length) {
           const enriched = await this.enrichPositionNames(mongoRows);
-          // mongo docs already mapped to CandidateRow via jsonStore.mapJsonToRow on write
-          const { rows } = mongoStore.filterMongoRows(enriched, { gender, department, year, section, limit, offset });
+          const inOpen = await this.filterOpenElectionRows(enriched);
+          // Ballot rows in Mongo store raw candidate fields (_id, name,
+          // position_name, image_url/description). Map to the same
+          // CandidateRow shape the Postgres/JSON paths return so the
+          // frontend always sees `id`, `manifesto`, `election_*`.
+          const mapped = this.mapBallotRow(inOpen);
+          const { rows } = mongoStore.filterMongoRows(mapped, { gender, department, year, section, limit, offset });
           return rows;
         }
       }
@@ -209,7 +293,9 @@ class CandidateService {
         const mongoRows = await mongoStore.readMongoCandidates();
         if (mongoRows && mongoRows.length) {
           const enriched = await this.enrichPositionNames(mongoRows);
-          const found = enriched.find(r => String(r._id) === String(id) || String(r.id) === String(id));
+          const inOpen = await this.filterOpenElectionRows(enriched);
+          const mapped = this.mapBallotRow(inOpen);
+          const found = mapped.find(r => String(r.id) === String(id));
           if (found) return found;
         }
       }
