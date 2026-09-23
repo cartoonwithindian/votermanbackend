@@ -369,8 +369,8 @@ class ElectionService {
         } catch (_) {
           res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
         }
-        if (res && res.value) {
-          const doc = res.value;
+        const doc = res && typeof res === 'object' ? (Object.prototype.hasOwnProperty.call(res, 'value') ? res.value : res) : null;
+        if (doc) {
           await this.syncConstituencyVoting(id, newStatus, client);
           await this.invalidateElections();
           return { election: { id: doc._id || doc.id || doc.postgresId, name: doc.name, status: doc.status, start_time: doc.start_time || doc.startTime || null, end_time: doc.end_time || doc.endTime || null, results_published_at: doc.results_published_at || doc.resultsPublishedAt || null }, previousStatus };
