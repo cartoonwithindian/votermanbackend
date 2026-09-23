@@ -43,15 +43,10 @@ class CandidateController {
       // Unauthenticated consumers (and authed rows missing class data) keep
       // the previous optional filters.
       const u = req.user;
-      // A client may browse any class by passing explicit department/year/
-      // section filters (the candidates page exposes a class picker). When no
-      // explicit class filter is given, authenticated students with a class on
-      // file are scoped to their own cohort as before.
       const hasOwnClass = Boolean(u && u.department && u.year);
-      const explicitDept = req.query.department !== undefined && req.query.department !== null && String(req.query.department).trim() !== '' && req.query.department !== 'all';
-      const department = explicitDept ? req.query.department : (hasOwnClass ? u.department : req.query.department);
-      const year = (explicitDept && req.query.year) ? req.query.year : (hasOwnClass ? u.year : req.query.year);
-      const section = explicitDept ? (req.query.section ?? '') : (hasOwnClass ? (u.section ?? '') : req.query.section);
+      const department = hasOwnClass ? u.department : req.query.department;
+      const year = hasOwnClass ? u.year : req.query.year;
+      const section = hasOwnClass ? (u.section ?? '') : req.query.section;
 
       const candidates = await candidateService.findApproved({
         activeOnly: active_only !== 'false',
