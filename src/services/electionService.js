@@ -462,9 +462,40 @@ class ElectionService {
    */
   async getReadiness(id) {
     if (isMongoOnly) {
-      // Mongo-only: return empty readiness (no Postgres) to avoid 500
       const election = await this.findById(id);
       if (!election) return { error: 'NOT_FOUND' };
+      try {
+        const { ObjectId } = require('mongodb');
+        const client = await getSharedClient();
+        const dbc = client ? client.db(getMongoDbName()) : null;
+        if (dbc) {
+          const eidStr = String(id);
+          const eid = ObjectId.isValid(eidStr) ? new ObjectId(eidStr) : null;
+          const eidQuery = eid ? { $or: [{ _id: eid }, { id: eidStr }, { postgresId: eidStr }] } : { $or: [{ id: eidStr }, { _id: eidStr }, { postgresId: eidStr }] };
+          const cts = await dbc.collection('constituencies').find({ $or: [{ election_id: eidStr }, { electionId: eidStr }] }).toArray();
+          const ctIds = cts.map(c => String(c._id)).filter(Boolean);
+          const psts = ctIds.length
+            ? await dbc.collection('positions').find({ $or: [{ constituency_id: { $in: ctIds } }, { constituencyId: { $in: ctIds } }] }).toArray()
+            : [];
+          const pids = psts.map(p => String(p._id)).filter(Boolean);
+          const candidates = pids.length
+            ? await dbc.collection('candidates').find({ $or: [{ position_id: { $in: pids } }, { positionId: { $in: pids } }, { linked_positions: { $in: pids } }, { linkedPositions: { $in: pids } }] }).toArray()
+            : [];
+          const authCount = await dbc.collection('voter_authorizations').countDocuments({ $or: [{ election_id: eidStr }, { electionId: eidStr }] });
+          const makeChecks = (ct, p, c, a) => ({
+            hasConstituencies: { status: ct > 0 ? 'pass' : 'warn', message: ct > 0 ? 'Has constituencies' : 'No constituencies configured', count: ct },
+            hasPositions: { status: p > 0 ? 'pass' : 'fail', message: p > 0 ? 'Has positions' : 'No positions configured', count: p },
+            hasCandidates: { status: c > 0 ? 'pass' : 'fail', message: c > 0 ? 'Has candidates' : 'No candidates configured', count: c },
+            hasAuthorizedStudents: { status: a > 0 ? 'pass' : 'warn', message: a > 0 ? 'Has authorized students' : 'No students authorized', count: a },
+          });
+          const checks = makeChecks(cts.length, psts.length, candidates.length, authCount);
+          const criticalPassed = checks.hasPositions.status === 'pass' && checks.hasCandidates.status === 'pass';
+          const warnings = Object.entries(checks).filter(([, c]) => c.status === 'warn').map(([n, c]) => ({ name: n, message: c.message }));
+          return { election_id: id, election_name: election.name, current_status: election.status, ready_to_open: criticalPassed, checks, warnings };
+        }
+      } catch (e) {
+        console.warn('[electionService] Mongo-only getReadiness fallback:', e.message);
+      }
       return {
         election_id: id,
         election_name: election.name,
