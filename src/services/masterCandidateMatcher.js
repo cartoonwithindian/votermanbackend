@@ -24,6 +24,7 @@ const positionService = require('./positionService');
 const candidateService = require('./candidateService');
 const { normalizeYear } = require('../utils/yearNormalizer');
 const { normalizeDepartment, normalizeSection } = require('../utils/classList');
+const { getDb: getSharedDb } = require('../db/mongoClient');
 const { pickCrSeat, isSingleGenderClass } = require('../utils/crSeat');
 
 const SECTIONLESS = ['MBA', 'MCA', 'BCom'];
@@ -56,6 +57,56 @@ function candidatesForClass(masterCandidates, { department, year, section }) {
     if (sourceYear(cand) !== y) return false;
     return sourceSection(cand) === sec;
   });
+}
+
+/**
+ * Auto-match master candidates for a single class within an election.
+ * The constituency is found (already created elsewhere); if the class has no
+ * constituency yet it is created first (creating its 2 CR seats).
+ *
+ * @param {string|number} electionId
+ * @param {{department, year, section}} cls
+ * @returns {Promise<{constituency, placed: Array, skipped: Array}>}
+ */
+/**
+ * Master candidates are STATIC: they live once in Mongo `candidates` with
+ * position_id null. Elections LINK to them (linked_positions); they are never
+ * cloned. Returns the matching master rows, or [] when the store is empty.
+ */
+async function mongoMastersForClass({ department, year, section }) {
+  try {
+    const dbc = await getSharedDb();
+    if (!dbc) return [];
+    const col = dbc.collection('candidates');
+    const docs = await col.find({ position_id: null, positionId: null }).toArray();
+    const dept = normalizeDepartment(department);
+    const y = normalizeYear(year) || '';
+    const sec = normalizeSection(section);
+    if (!dept || !y) return [];
+    return docs.filter((d) => {
+      if (!d || !(d.fullName || d.full_name || d.name)) return false;
+      if (normalizeDepartment(d.department ?? d.Department ?? '') !== dept) return false;
+      if ((normalizeYear(d.year ?? d.Year) || '') !== y) return false;
+      return normalizeSection(d.section ?? d.Section ?? '') === sec;
+    });
+  } catch (err) {
+    console.warn('[masterCandidateMatcher] mongoMastersForClass failed:', err.message);
+    return [];
+  }
+}
+
+function candidateIdOf(cand) {
+  if (cand == null) return null;
+  return String(cand._id || cand.id || cand.postgresId || '') || null;
+}
+
+function linkedIdsOf(cand) {
+  if (cand == null) return [];
+  return Array.from(new Set([
+    String(cand.position_id ?? cand.positionId ?? ''),
+    ...(Array.isArray(cand.linked_positions) ? cand.linked_positions.map(String) : []),
+    ...(Array.isArray(cand.linkedPositions) ? cand.linkedPositions.map(String) : []),
+  ])).filter(Boolean);
 }
 
 /**
@@ -106,7 +157,12 @@ async function matchClassForElection(electionId, cls) {
   }
 
   const positions = await positionService.findByConstituencyId(constituency.id).catch(() => []);
-  const candidates = candidatesForClass(jsonStore.readJsonCandidates(), { department, year, section: expectedSection });
+
+  // Source: Mongo masters first (static, editable), JSON file as fallback.
+  let candidates = await mongoMastersForClass({ department, year, section: expectedSection });
+  if (!candidates.length) {
+    candidates = candidatesForClass(jsonStore.readJsonCandidates(), { department, year, section: expectedSection });
+  }
 
   // Track per-seat occupancy as we place. Single-gender classes (e.g. girls
   // only, no boys) spread their candidates across BOTH seats so two girls /
@@ -126,76 +182,45 @@ async function matchClassForElection(electionId, cls) {
       skipped.push({ name, position: cand.position || null, reason: 'no seat' });
       continue;
     }
-    const canonical = await candidateService.findCanonicalCandidate({ name, department, year, section: expectedSection });
-    if (canonical) {
-      const seatId = String(seat.id);
-      const linked = Array.from(new Set([
-        String(canonical.position_id ?? canonical.positionId ?? ''),
-        ...(Array.isArray(canonical.linked_positions) ? canonical.linked_positions.map(String) : []),
-        ...(Array.isArray(canonical.linkedPositions) ? canonical.linkedPositions.map(String) : []),
-      ]));
-      if (linked.includes(seatId)) {
-        skipped.push({ name, position_id: seat.id, position_name: seat.name, reason: 'already on ballot' });
-        continue;
-      }
-      if (positions.some(p => linked.includes(String(p.id)))) {
-        skipped.push({ name, position_id: seat.id, position_name: seat.name, reason: 'already placed in election' });
-        continue;
-      }
-      try {
-        const linkedDoc = await candidateService.linkToPosition(canonical.id, seat.id);
-        if (!linkedDoc) throw new Error('link failed');
-        bump(seat.id);
-        placed.push({
-          id: linkedDoc.id,
-          name,
-          position_id: seat.id,
-          position_name: seat.name,
-        });
-      } catch (err) {
-        try {
-          const created = await candidateService.create({
-            position_id: seat.id,
-            name,
-            description: cand.manifesto || cand.bio || '',
-            image_url: cand.profilePhotoUrl || cand.profile_photo_url || '',
-            department,
-            year,
-            section: expectedSection,
-            gender: cand.gender || null,
-          });
-          bump(seat.id);
-          placed.push({ id: created.id, name, position_id: seat.id, position_name: seat.name });
-        } catch (e2) {
-          skipped.push({ name, position_id: seat.id, reason: e2.code || e2.message });
-        }
-      }
+    const seatId = String(seat.id);
+
+    // Resolve the STATIC master: Mongo masters carry _id directly; JSON
+    // candidates resolve via findCanonicalCandidate (which returns the raw
+    // Mongo doc, so prefer _id over the undefined legacy `id` field).
+    let canonical = null;
+    let canonicalId = candidateIdOf(cand);
+    if (!canonicalId) {
+      canonical = await candidateService.findCanonicalCandidate({ name, department, year, section: expectedSection });
+      canonicalId = candidateIdOf(canonical);
+    }
+    if (!canonicalId) {
+      skipped.push({ name, position_id: seat.id, position_name: seat.name, reason: 'no master candidate' });
       continue;
     }
-    if (await candidateService.candidateExists(seat.id, name)) {
+
+    const linked = Array.from(new Set([...linkedIdsOf(cand), ...linkedIdsOf(canonical)]));
+    if (linked.includes(seatId)) {
       skipped.push({ name, position_id: seat.id, position_name: seat.name, reason: 'already on ballot' });
       continue;
     }
+    if (positions.some(p => linked.includes(String(p.id)))) {
+      skipped.push({ name, position_id: seat.id, position_name: seat.name, reason: 'already placed in election' });
+      continue;
+    }
+
+    // LINK the master — never clone it.
     try {
-      const created = await candidateService.create({
-        position_id: seat.id,
-        name,
-        description: cand.manifesto || cand.bio || '',
-        image_url: cand.profilePhotoUrl || cand.profile_photo_url || '',
-        department,
-        year,
-        section: expectedSection,
-        gender: cand.gender || null,
-      });
+      const linkedDoc = await candidateService.linkToPosition(canonicalId, seatId);
+      if (!linkedDoc) throw new Error('link failed');
       bump(seat.id);
       placed.push({
-        id: created.id,
+        id: linkedDoc.id,
         name,
         position_id: seat.id,
         position_name: seat.name,
       });
     } catch (err) {
-      skipped.push({ name, position_id: seat.id, reason: err.code || err.message });
+      skipped.push({ name, position_id: seat.id, position_name: seat.name, reason: err.message });
     }
   }
 
