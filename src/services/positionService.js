@@ -335,16 +335,16 @@ class PositionService {
             res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updateDoc }, { returnDocument: 'after' });
           }
         } catch (_) {}
-        if (!res || !res.value) {
+        if (!res) {
           // try by mapped id field
           res = await col.findOneAndUpdate({ id: String(id) }, { $set: updateDoc }, { returnDocument: 'after' });
         }
-        if (!res || !res.value) {
+        if (!res) {
           // fallback: try string _id
           res = await col.findOneAndUpdate({ _id: String(id) }, { $set: updateDoc }, { returnDocument: 'after' });
         }
-        if (res && res.value) {
-          const d = res.value;
+        const d = res && typeof res === 'object' ? (Object.prototype.hasOwnProperty.call(res, 'value') ? res.value : res) : null;
+        if (d) {
           return {
             id: d._id ? String(d._id) : d.id,
             constituency_id: d.constituency_id ?? d.constituencyId ?? position.constituency_id,

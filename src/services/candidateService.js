@@ -595,7 +595,7 @@ class CandidateService {
               docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }, { linked_positions: String(positionId) }, { linkedPositions: String(positionId) }] }).limit(options.limit || 100).skip(options.offset || 0).toArray();
             }
             if (docs && docs.length) {
-              return docs.map(d => ({ id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true }));
+              return docs.map(d => ({ id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true, gender: d.gender ?? null, department: d.department ?? null, year: d.year ?? null, section: d.section ?? null, email: d.email ?? null }));
             }
           } catch (e) {
             console.warn('[candidateService] findByPositionId mongo fallback to []:', e.message);
@@ -640,7 +640,7 @@ class CandidateService {
             try { if (ObjectId.isValid(String(id))) doc = await col.findOne({ _id: new ObjectId(String(id)) }); } catch (_) {}
             if (!doc) doc = await col.findOne({ $or: [{ id: String(id) }, { _id: String(id) }] });
             if (!doc) return null;
-            return { id: doc._id ? String(doc._id) : doc.id, position_id: doc.position_id ?? doc.positionId, name: doc.name, description: doc.description, image_url: doc.image_url ?? doc.imageUrl, display_order: doc.display_order ?? doc.displayOrder ?? 0, is_active: doc.is_active ?? doc.isActive ?? true };
+            return { id: doc._id ? String(doc._id) : doc.id, position_id: doc.position_id ?? doc.positionId, name: doc.name, description: doc.description, image_url: doc.image_url ?? doc.imageUrl, display_order: doc.display_order ?? doc.displayOrder ?? 0, is_active: doc.is_active ?? doc.isActive ?? true, gender: doc.gender ?? null, department: doc.department ?? null, year: doc.year ?? null, section: doc.section ?? null, email: doc.email ?? null };
           } catch (e) {
             console.warn('[candidateService] findByIdSimple mongo fallback to null:', e.message);
           }
@@ -667,9 +667,9 @@ class CandidateService {
             const col = dbc.collection('candidates');
             let res = null;
             try { if (ObjectId.isValid(String(id))) res = await col.findOneAndDelete({ _id: new ObjectId(String(id)) }); } catch (_) {}
-            if (!res || !res.value) res = await col.findOneAndDelete({ $or: [{ id: String(id) }, { _id: String(id) }] });
-            if (!res || !res.value) return null;
-            const d = res.value;
+            if (!res) res = await col.findOneAndDelete({ $or: [{ id: String(id) }, { _id: String(id) }] });
+            const d = res && typeof res === 'object' ? (Object.prototype.hasOwnProperty.call(res, 'value') ? res.value : res) : null;
+            if (!d) return null;
             await this.invalidateCandidates();
             return { id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, department: d.department ?? null, year: d.year ?? null, section: d.section ?? null, gender: d.gender ?? null, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true };
           } catch (e) {
@@ -991,11 +991,11 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
             upd.updated_at = new Date(); upd.updatedAt = new Date();
             let res = null;
             try { if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: upd }, { returnDocument: 'after' }); } catch (_) {}
-            if (!res || !res.value) res = await col.findOneAndUpdate({ id: String(id) }, { $set: upd }, { returnDocument: 'after' });
-            if (res && res.value) {
-              const d = res.value;
+            if (!res) res = await col.findOneAndUpdate({ id: String(id) }, { $set: upd }, { returnDocument: 'after' });
+            const d = res && typeof res === 'object' ? (Object.prototype.hasOwnProperty.call(res, 'value') ? res.value : res) : null;
+            if (d) {
               await this.invalidateCandidates();
-              return { id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0 };
+              return { id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true, gender: d.gender ?? null, department: d.department ?? null, year: d.year ?? null, section: d.section ?? null, email: d.email ?? null };
             }
           } catch (e) {
             console.warn('[candidateService] update mongo fallback:', e.message);

@@ -407,10 +407,10 @@ class ConstituencyService {
         try {
           if (ObjectId.isValid(String(id))) res = await col.findOneAndUpdate({ _id: new ObjectId(String(id)) }, { $set: updates }, { returnDocument: 'after' });
         } catch (_) {}
-        if (!res || !res.value) res = await col.findOneAndUpdate({ id: String(id) }, { $set: updates }, { returnDocument: 'after' });
-        if (!res || !res.value) res = await col.findOneAndUpdate({ _id: String(id) }, { $set: updates }, { returnDocument: 'after' });
-        if (res && res.value) {
-          const d = res.value;
+        if (!res) res = await col.findOneAndUpdate({ id: String(id) }, { $set: updates }, { returnDocument: 'after' });
+        if (!res) res = await col.findOneAndUpdate({ _id: String(id) }, { $set: updates }, { returnDocument: 'after' });
+        const d = res && typeof res === 'object' ? (Object.prototype.hasOwnProperty.call(res, 'value') ? res.value : res) : null;
+        if (d) {
           await this.invalidateConstituencies();
           return { id: d._id ? String(d._id) : d.id, election_id: d.election_id ?? d.electionId, department: d.department, year: d.year, section: d.section ?? '', name: d.name, is_active: d.is_active ?? d.isActive ?? true, voting_open: d.voting_open ?? d.votingOpen ?? false, created_at: d.created_at ?? d.createdAt, updated_at: d.updated_at ?? d.updatedAt };
         }
