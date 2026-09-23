@@ -658,5 +658,41 @@
     "email": "sharmaudit2008@gmail.com",
     "manifesto": "If I get selected as the CR my main focus will be on making sure that everyone in the class gets a chance to be heard I will try to communicate student's problems suggestions and requests properly to the teachers and college authorities I will also keep the class updated about important notices assignments schedules and other information so that no one misses anything I want to maintain a friendly environment where students can easily approach me whenever they have an issue I know I cannot solve every problem but I will make sure that I listen to everyone and genuinely try to help wherever I can I will try to be a CR who represents the whole class not just a few people",
     "profilePhotoUrl": "https://fra.cloud.appwrite.io/v1/storage/buckets/candidate-photos/files/6ab2b45f00075beedfac/view?project=6a961a3200335ef36ba8"
+  },
+  {
+    "fullName": "TEST BOY ONE",
+    "position": "Class Representative (Boys)",
+    "department": "TEST",
+    "year": "1 Sem",
+    "section": "T1",
+    "email": "testboyone@voteweb.test",
+    "manifesto": "Test CR candidate (Boys) for the TEST class T1 1st Year."
+  },
+  {
+    "fullName": "TEST BOY TWO",
+    "position": "Class Representative (Boys)",
+    "department": "TEST",
+    "year": "1 Sem",
+    "section": "T1",
+    "email": "testboytwo@voteweb.test",
+    "manifesto": "Test CR candidate (Boys) for the TEST class T1 1st Year."
+  },
+  {
+    "fullName": "TEST GIRL ONE",
+    "position": "Class Representative (Girls)",
+    "department": "TEST",
+    "year": "1 Sem",
+    "section": "T1",
+    "email": "testgirlone@voteweb.test",
+    "manifesto": "Test CR candidate (Girls) for the TEST class T1 1st Year."
+  },
+  {
+    "fullName": "TEST GIRL TWO",
+    "position": "Class Representative (Girls)",
+    "department": "TEST",
+    "year": "1 Sem",
+    "section": "T1",
+    "email": "testgirltwo@voteweb.test",
+    "manifesto": "Test CR candidate (Girls) for the TEST class T1 1st Year."
   }
 ]
