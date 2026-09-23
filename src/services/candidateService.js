@@ -31,7 +31,8 @@ class CandidateService {
   async enrichPositionNames(rows, positions) {
     if (!rows || !rows.length) return rows;
     const missing = rows.some(r => !(r.position_name || r.position));
-    if (!missing) return rows;
+    const missingGender = rows.some(r => !(r.gender));
+    if (!missing && !missingGender) return rows;
     const db = await getSharedDb();
     if (!db) return rows;
     try {
@@ -42,10 +43,14 @@ class CandidateService {
         if (p.postgresId != null) byId.set(String(p.postgresId), p);
       }
       return rows.map(r => {
-        if (r.position_name || r.position) return r;
         const pos = byId.get(String(r.position_id ?? r.positionId ?? ''));
         if (!pos) return r;
-        return { ...r, position_id: r.position_id ?? pos._id ? String(pos._id) : r.position_id, position_name: pos.name };
+        return {
+          ...r,
+          position_id: r.position_id ?? pos._id ? String(pos._id) : r.position_id,
+          position_name: pos.name,
+          gender: r.gender || pos.gender || 'Other',
+        };
       });
     } catch (e) {
       console.warn('[candidateService] enrichPositionNames failed:', e.message);

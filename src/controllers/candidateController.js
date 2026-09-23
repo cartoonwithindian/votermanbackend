@@ -93,7 +93,7 @@ class CandidateController {
         });
       }
 
-      const lookupId = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const lookupId = isMongoOnly ? String(id).trim() : parseInt(id);
       const candidate = await candidateService.findApprovedById(lookupId);
 
       if (!candidate) {
