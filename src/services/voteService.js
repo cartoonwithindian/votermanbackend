@@ -779,7 +779,8 @@ class VoteService {
       return { success: false, error: 'Candidate not found or inactive', code: 'CANDIDATE_NOT_FOUND', status: 404 };
     }
     const candidatePositionId = candidate.position_id ?? candidate.positionId;
-    if (!this._mongoIdEquals(candidatePositionId, positionId)) {
+    const linkedPositions = Array.isArray(candidate.linked_positions) ? candidate.linked_positions : Array.isArray(candidate.linkedPositions) ? candidate.linkedPositions : [];
+    if (!this._mongoIdEquals(candidatePositionId, positionId) && !linkedPositions.some(lp => this._mongoIdEquals(lp, positionId))) {
       return { success: false, error: 'Candidate not found or inactive', code: 'CANDIDATE_NOT_FOUND', status: 404 };
     }
 

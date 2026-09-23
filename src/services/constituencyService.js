@@ -180,7 +180,8 @@ class ConstituencyService {
         // Fetch candidates for election then filter case-insensitively in JS
         const docs = await col.find({ $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }, { election_id: String(electionId) }, { electionId: String(electionId) }] }).toArray();
         const match = (a, b) => (a ?? '').toString().trim().toLowerCase() === (b ?? '').toString().trim().toLowerCase();
-        let filtered = docs.filter(d => match(d.department, department) && match(d.year, year) && match(d.section ?? '', section ?? ''));
+        const targetYear = normalizeYear(year);
+        let filtered = docs.filter(d => match(d.department, department) && match(normalizeYear(d.year), targetYear) && match(d.section ?? '', section ?? ''));
         if (activeOnly) filtered = filtered.filter(d => (d.is_active ?? d.isActive ?? true) !== false);
         if (!filtered.length) return null;
         filtered.sort((a, b) => String(a._id).localeCompare(String(b._id)));

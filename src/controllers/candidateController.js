@@ -369,6 +369,42 @@ class CandidateController {
           continue;
         }
 
+        const canonical = await candidateService.findCanonicalCandidate({ name, department, year, section });
+        if (canonical) {
+          const seatId = String(seat.id);
+          const linked = Array.from(new Set([
+            String(canonical.position_id ?? canonical.positionId ?? ''),
+            ...(Array.isArray(canonical.linked_positions) ? canonical.linked_positions.map(String) : []),
+            ...(Array.isArray(canonical.linkedPositions) ? canonical.linkedPositions.map(String) : []),
+          ]));
+          if (linked.includes(seatId)) {
+            skipped.push({ name, reason: 'already on ballot', position_id: seat.id, position_name: seat.name });
+            continue;
+          }
+          if (positions.some(p => linked.includes(String(p.id)))) {
+            skipped.push({ name, reason: 'already placed in election', position_id: seat.id, position_name: seat.name });
+            continue;
+          }
+          const linkedDoc = await candidateService.linkToPosition(canonical.id, seat.id);
+          if (!linkedDoc) {
+            skipped.push({ name, reason: 'link failed', position_id: seat.id, position_name: seat.name });
+            continue;
+          }
+          seatCounts[String(constituency.id)][seat.id] = (seatCounts[String(constituency.id)][seat.id] || 0) + 1;
+          added.push({
+            id: linkedDoc.id,
+            name,
+            position_id: seat.id,
+            position_name: seat.name,
+            constituency_id: constituency.id,
+            department,
+            year,
+            section,
+            gender: c.gender || null,
+          });
+          continue;
+        }
+
         if (await candidateService.candidateExists(seat.id, name)) {
           skipped.push({ name, reason: 'already on ballot', position_id: seat.id, position_name: seat.name });
           continue;

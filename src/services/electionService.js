@@ -91,6 +91,10 @@ class ElectionService {
           results_published_at: r.results_published_at || r.resultsPublishedAt || null,
           created_at: r.created_at || r.createdAt || null,
           updated_at: r.updated_at || r.updatedAt || null,
+          department: r.department || null,
+          year: r.year || null,
+          semester: r.semester || null,
+          section: r.section || null,
         }));
       } catch (e) {
         console.warn('electionService.findAll mongo fallback failed:', e.message);
@@ -153,6 +157,10 @@ class ElectionService {
           results_published_at: doc.results_published_at || doc.resultsPublishedAt || null,
           created_at: doc.created_at || doc.createdAt || null,
           updated_at: doc.updated_at || doc.updatedAt || null,
+          department: doc.department || null,
+          year: doc.year || null,
+          semester: doc.semester || null,
+          section: doc.section || null,
         };
       } catch (e) {
         console.warn('electionService.findById mongo fallback failed:', e.message);
@@ -186,7 +194,7 @@ class ElectionService {
           return { id: Date.now(), name: data.name, description: data.description || null, start_time: data.start_time || null, end_time: data.end_time || null, status: 'DRAFT' };
         }
         const col = client.db(getMongoDbName()).collection('elections');
-        const doc = { name: data.name, description: data.description || null, start_time: data.start_time || null, end_time: data.end_time || null, status: 'DRAFT', created_at: new Date(), updated_at: new Date() };
+        const doc = { name: data.name, description: data.description || null, start_time: data.start_time || null, end_time: data.end_time || null, status: 'DRAFT', department: data.department || null, year: data.year || null, semester: data.semester || null, section: data.section || null, created_at: new Date(), updated_at: new Date() };
         const res = await col.insertOne(doc);
         await this.invalidateElections();
         return { id: res.insertedId, ...doc };

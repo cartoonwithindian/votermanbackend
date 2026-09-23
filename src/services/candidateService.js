@@ -11,6 +11,7 @@ const db = require('../db');
 const jsonStore = require('./jsonCandidateStore');
 const mongoStore = require('./mongoCandidateStore');
 const { normalizeYear } = require('../utils/yearNormalizer');
+const { normalizeDepartment, normalizeSection } = require('../utils/classList');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getDb: getSharedDb } = require('../db/mongoClient');
 const redisCache = require('../utils/redisCache');
@@ -59,10 +60,13 @@ class CandidateService {
   }
 
   /**
-   * Restrict ballot rows to positions whose parent election is OPEN/DRAFT/
-   * SCHEDULED, so stale rows sitting on CLOSED/orphan positions don't leak
-   * into the public student list. Uses the same positions→constituencies→
-   * elections join as the admin list.
+   * Restrict ballot rows to candidates tied to an OPEN/SCHEDULED election.
+   * A row counts as open when its PRIMARY position OR any linked position
+   * (linked_positions) resolves to an OPEN/SCHEDULED election — a canonical
+   * candidate reused (linked) into a new election must appear there even when
+   * its original primary seat sits in a stale election. Rows whose every
+   * position chain is non-open (or orphaned) drop out of the public list.
+   * Uses the same positions→constituencies→elections join as the admin list.
    */
   async filterOpenElectionRows(rows, preloaded) {
     if (!rows || !rows.length) return rows;
@@ -91,13 +95,19 @@ class CandidateService {
           electionStatus.set(String(e._id), String(e.status || '').toUpperCase());
           if (e.postgresId != null) electionStatus.set(String(e.postgresId), String(e.status || '').toUpperCase());
         }
-        const open = ['OPEN', 'DRAFT', 'SCHEDULED', 'CLOSED', 'PUBLISHED'];
-        return rows.filter(r => {
-          const pos = positionById.get(String(r.position_id ?? r.positionId ?? ''));
-          if (!pos) return false;
+        const statusOf = (positionId) => {
+          const pos = positionById.get(String(positionId ?? ''));
+          if (!pos) return '';
           const ct = constituentById.get(String(pos.constituency_id ?? pos.constituencyId ?? ''));
-          if (!ct) return false;
-          return open.includes(electionStatus.get(String(ct.election_id ?? ct.electionId ?? '')) || '');
+          if (!ct) return '';
+          return electionStatus.get(String(ct.election_id ?? ct.electionId ?? '')) || '';
+        };
+        const open = ['OPEN', 'SCHEDULED'];
+        return rows.filter(r => {
+          const pids = [String(r.position_id ?? r.positionId ?? '')];
+          const linked = Array.isArray(r.linked_positions) ? r.linked_positions : Array.isArray(r.linkedPositions) ? r.linkedPositions : [];
+          for (const l of linked) pids.push(String(l));
+          return pids.some(pid => open.includes(statusOf(pid)));
         });
     } catch (e) {
       console.warn('[candidateService] filterOpenElectionRows failed, keeping rows:', e.message);
@@ -522,11 +532,14 @@ class CandidateService {
             let docs = null;
             if (await mongoStore.hasMongoCandidates()) {
               const rows = await mongoStore.readMongoCandidates();
-              if (rows && rows.length) docs = rows.filter(r => String(r.position_id ?? r.positionId) === String(positionId));
+              if (rows && rows.length) {
+                const target = String(positionId);
+                docs = rows.filter(r => this._belongsToPosition(r, target));
+              }
             }
             if (!docs || !docs.length) {
               const col = dbc.collection('candidates');
-              docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }] }).limit(options.limit || 100).skip(options.offset || 0).toArray();
+              docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }, { linked_positions: String(positionId) }, { linkedPositions: String(positionId) }] }).limit(options.limit || 100).skip(options.offset || 0).toArray();
             }
             if (docs && docs.length) {
               return docs.map(d => ({ id: d._id ? String(d._id) : d.id, position_id: d.position_id ?? d.positionId, name: d.name, description: d.description, image_url: d.image_url ?? d.imageUrl, display_order: d.display_order ?? d.displayOrder ?? 0, is_active: d.is_active ?? d.isActive ?? true }));
@@ -696,7 +709,7 @@ class CandidateService {
         if (dbc) {
           try {
             const col = dbc.collection('candidates');
-            const docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }] }).toArray();
+            const docs = await col.find({ $or: [{ position_id: positionId }, { positionId: String(positionId) }, { position_id: String(positionId) }, { linked_positions: String(positionId) }, { linkedPositions: String(positionId) }] }).toArray();
             return docs.some(d => String(d.name || '').trim().toLowerCase() === target);
           } catch (e) {
             console.warn('[candidateService] candidateExists mongo fallback false:', e.message);
@@ -715,6 +728,145 @@ class CandidateService {
   }
 
   /**
+   * True when a doc's primary position OR any linked position matches a target.
+   * Position references on ballot docs are piecemeal strings/numbers/ids, so
+   * all sides are stringified before comparing.
+   */
+  _belongsToPosition(doc, positionId) {
+    const target = String(positionId);
+    if (String(doc.position_id ?? doc.positionId) === target) return true;
+    const linked = Array.isArray(doc.linked_positions) ? doc.linked_positions : Array.isArray(doc.linkedPositions) ? doc.linkedPositions : [];
+    return linked.some(x => String(x) === target);
+  }
+
+  /**
+   * Find the ONE canonical ballot candidate for an identity
+   * (name + department + year + section), regardless of how many copies the
+   * matcher created across elections. Among duplicates, prefer the copy tied
+   * to the most active election (OPEN > SCHEDULED > DRAFT > unknown >
+   * CLOSED/PUBLISHED), oldest created_at first — so reuse always picks the
+   * live-cohort copy over stale test copies.
+   */
+  async findCanonicalCandidate({ name, department, year, section } = {}, opts = {}) {
+    if (isMongoOnly) {
+      try {
+        const col = await this._getCollection();
+        if (!col) return null;
+        const all = await col.find({}).toArray();
+        if (!all.length) return null;
+        const targetName = String(name ?? '').trim().toLowerCase();
+        const targetDept = String(normalizeDepartment(department) || department || '').trim().toLowerCase();
+        const targetYear = normalizeYear(year) || '';
+        const targetSec = normalizeSection(section);
+        const matches = all.filter(d => {
+          const dYear = normalizeYear(d.year) || '';
+          const dSec = String(d.section ?? '').trim();
+          const dSecNorm = (dSec === '' || dSec === '-') ? '' : dSec;
+          if (targetName && String(d.name ?? '').trim().toLowerCase() !== targetName) return false;
+          if (targetDept && String(normalizeDepartment(d.department) || d.department || '').trim().toLowerCase() !== targetDept) return false;
+          if (targetYear && dYear !== targetYear) return false;
+          if (targetSec !== undefined && dSecNorm !== String(targetSec).trim()) return false;
+          return true;
+        });
+        if (!matches.length) return null;
+        const ranked = await this._electionActivityRank(matches);
+        return ranked[0] || null;
+      } catch (e) {
+        console.warn('[candidateService] findCanonicalCandidate failed:', e.message);
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Deterministically order ballot docs by the activity of the election they
+   * sit on (derived via position -> constituency -> election). Ties break on
+   * created_at, oldest first.
+   */
+  async _electionActivityRank(docs) {
+    try {
+      const dbc = await getSharedDb();
+      if (!dbc) return docs;
+      const [posDocs, ctDocs, elecDocs] = await Promise.all([
+        dbc.collection('positions').find({}).toArray(),
+        dbc.collection('constituencies').find({}).toArray(),
+        dbc.collection('elections').find({}).toArray(),
+      ]);
+      const posById = new Map();
+      for (const p of posDocs) { posById.set(String(p._id), p); if (p.postgresId != null) posById.set(String(p.postgresId), p); }
+      const ctById = new Map();
+      for (const c of ctDocs) { ctById.set(String(c._id), c); if (c.postgresId != null) ctById.set(String(c.postgresId), c); }
+      const elecStatus = new Map();
+      for (const e of elecDocs) { elecStatus.set(String(e._id), String(e.status || '').toUpperCase()); if (e.postgresId != null) elecStatus.set(String(e.postgresId), String(e.status || '').toUpperCase()); }
+      const RANK = { OPEN: 0, SCHEDULED: 1, DRAFT: 2, CLOSED: 4, PUBLISHED: 5 };
+      const rows = docs.map(d => {
+        const pids = [String(d.position_id ?? d.positionId ?? '')];
+        const linked = Array.isArray(d.linked_positions) ? d.linked_positions : Array.isArray(d.linkedPositions) ? d.linkedPositions : [];
+        for (const l of linked) pids.push(String(l));
+        let best = Infinity;
+        for (const pid of pids) {
+          const pos = posById.get(pid);
+          if (!pos) continue;
+          const ct = ctById.get(String(pos.constituency_id ?? pos.constituencyId ?? ''));
+          if (!ct) continue;
+          const status = elecStatus.get(String(ct.election_id ?? ct.electionId ?? ''));
+          if (status !== undefined) best = Math.min(best, RANK[status] ?? 3);
+        }
+        return { doc: d, rank: best === Infinity ? 3 : best, created: d.created_at ?? d.createdAt ?? d._id };
+      });
+      rows.sort((a, b) => a.rank - b.rank || (a.created < b.created ? -1 : a.created > b.created ? 1 : 0));
+      return rows.map(r => r.doc);
+    } catch (e) {
+      return docs;
+    }
+  }
+
+  /**
+   * Link an existing candidate doc to an additional ballot position without
+   * cloning the doc or disturbing its primary position. Idempotent ($addToSet).
+   * Returns the linked doc or null.
+   */
+  async linkToPosition(candidateId, positionId) {
+    if (isMongoOnly) {
+      try {
+        const col = await this._getCollection();
+        if (!col) return null;
+        const pid = String(positionId);
+        const upd = { $addToSet: { linked_positions: pid, linkedPositions: pid } };
+        const { ObjectId } = require('mongodb');
+        let res = null;
+        try {
+          if (ObjectId.isValid(String(candidateId))) {
+            res = await col.findOneAndUpdate({ _id: new ObjectId(String(candidateId)) }, upd, { returnDocument: 'after' });
+          }
+        } catch (_) {}
+        if (!res || !res.value) {
+          res = await col.findOneAndUpdate({ $or: [{ id: String(candidateId) }, { id: Number(candidateId) }, { _id: String(candidateId) }, { postgresId: Number(candidateId) }] }, upd, { returnDocument: 'after' });
+        }
+        if (!res || !res.value) return null;
+        const d = res.value;
+        await this.invalidateCandidates();
+        return {
+          id: d._id ? String(d._id) : d.id,
+          position_id: d.position_id ?? d.positionId ?? null,
+          linked_positions: Array.isArray(d.linked_positions) ? d.linked_positions : Array.isArray(d.linkedPositions) ? d.linkedPositions : [],
+        };
+      } catch (e) {
+        console.warn('[candidateService] linkToPosition failed:', e.message);
+        return null;
+      }
+    }
+    return null;
+  }
+
+  async _getCollection() {
+    const dbc = await getSharedDb();
+    if (!dbc) return null;
+    return dbc.collection('candidates');
+  }
+
+  /**
    * Create a ballot row in `candidates` for an approved applicant.
    * Used by approval/assign-ballot flows. Duplicate (position_id, name)
    * surfaces as 23505 for the caller to swallow; unknown position as 23503.
@@ -726,7 +878,7 @@ class CandidateService {
         if (dbc) {
           try {
             const col = dbc.collection('candidates');
-            const doc = { position_id, positionId: position_id, name, description: description ?? manifest, image_url: image_url, imageUrl: image_url, department: department ?? null, year: year ?? null, section: section ?? null, gender: gender ?? null, display_order: 1, displayOrder: 1, is_active: true, isActive: true, created_at: new Date(), createdAt: new Date() };
+            const doc = { position_id, positionId: position_id, linked_positions: [String(position_id)], linkedPositions: [String(position_id)], name, description: description ?? manifest, image_url: image_url, imageUrl: image_url, department: department ?? null, year: year ?? null, section: section ?? null, gender: gender ?? null, display_order: 1, displayOrder: 1, is_active: true, isActive: true, created_at: new Date(), createdAt: new Date() };
             const res = await col.insertOne(doc);
             await this.invalidateCandidates();
             return { id: String(res.insertedId), position_id, name, description: description ?? manifest, image_url, department, year, section, gender, display_order: 1, is_active: true };
@@ -860,18 +1012,13 @@ if (data.image_url !== undefined) { upd.image_url = data.image_url; upd.imageUrl
     const dbc = await getSharedDb();
     if (!dbc || !student || !student.name) return null;
     try {
-      const col = dbc.collection('candidates');
-      const cohort = {
+      const canonical = await this.findCanonicalCandidate({
         name: student.name,
-        department: student.department || undefined,
-        year: student.year ? normalizeYear(student.year) : undefined,
-        section: student.section || undefined,
-      };
-      const query = {};
-      for (const [k, v] of Object.entries(cohort)) {
-        if (v !== undefined) query[k] = v;
-      }
-      const doc = await col.findOne(query);
+        department: student.department,
+        year: student.year,
+        section: student.section,
+      });
+      const doc = canonical || null;
       if (!doc) return null;
       return {
         id: String(doc._id),

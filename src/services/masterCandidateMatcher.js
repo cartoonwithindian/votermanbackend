@@ -12,7 +12,9 @@
  *    pickCrSeat): a same-gender pair or gender-less candidate still gets a
  *    deterministic seat.
  *  - Existing candidates on the seat are never replaced/overwritten; a
- *    candidate already on the same seat is skipped as a duplicate.
+ *    candidate already on the same seat is skipped as a duplicate. A master
+ *    candidate keeps ONE canonical ballot doc: later elections LINK to it
+ *    (linked_positions) instead of cloning it.
  *  - Never deletes, never moves, never touches other elections.
  */
 
@@ -124,8 +126,53 @@ async function matchClassForElection(electionId, cls) {
       skipped.push({ name, position: cand.position || null, reason: 'no seat' });
       continue;
     }
-    const exists = await candidateService.candidateExists(seat.id, name);
-    if (exists) {
+    const canonical = await candidateService.findCanonicalCandidate({ name, department, year, section: expectedSection });
+    if (canonical) {
+      const seatId = String(seat.id);
+      const linked = Array.from(new Set([
+        String(canonical.position_id ?? canonical.positionId ?? ''),
+        ...(Array.isArray(canonical.linked_positions) ? canonical.linked_positions.map(String) : []),
+        ...(Array.isArray(canonical.linkedPositions) ? canonical.linkedPositions.map(String) : []),
+      ]));
+      if (linked.includes(seatId)) {
+        skipped.push({ name, position_id: seat.id, position_name: seat.name, reason: 'already on ballot' });
+        continue;
+      }
+      if (positions.some(p => linked.includes(String(p.id)))) {
+        skipped.push({ name, position_id: seat.id, position_name: seat.name, reason: 'already placed in election' });
+        continue;
+      }
+      try {
+        const linkedDoc = await candidateService.linkToPosition(canonical.id, seat.id);
+        if (!linkedDoc) throw new Error('link failed');
+        bump(seat.id);
+        placed.push({
+          id: linkedDoc.id,
+          name,
+          position_id: seat.id,
+          position_name: seat.name,
+        });
+      } catch (err) {
+        try {
+          const created = await candidateService.create({
+            position_id: seat.id,
+            name,
+            description: cand.manifesto || cand.bio || '',
+            image_url: cand.profilePhotoUrl || cand.profile_photo_url || '',
+            department,
+            year,
+            section: expectedSection,
+            gender: cand.gender || null,
+          });
+          bump(seat.id);
+          placed.push({ id: created.id, name, position_id: seat.id, position_name: seat.name });
+        } catch (e2) {
+          skipped.push({ name, position_id: seat.id, reason: e2.code || e2.message });
+        }
+      }
+      continue;
+    }
+    if (await candidateService.candidateExists(seat.id, name)) {
       skipped.push({ name, position_id: seat.id, position_name: seat.name, reason: 'already on ballot' });
       continue;
     }

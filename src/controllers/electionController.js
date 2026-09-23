@@ -116,7 +116,7 @@ class ElectionController {
    */
   async create(req, res, next) {
     try {
-      const { name, description, start_time, end_time, classes } = req.body;
+      const { name, description, start_time, end_time, classes, department, year, semester, section } = req.body;
 
       // Validate required fields
       if (!name || typeof name !== 'string' || name.trim() === '') {
@@ -172,6 +172,10 @@ class ElectionController {
         description: description?.trim() || null,
         start_time: start_time ? new Date(start_time).toISOString() : null,
         end_time: end_time ? new Date(end_time).toISOString() : null,
+        department: department ? normalizeDepartment(department) : null,
+        year: year ? normalizeYear(year) || String(year).trim() : null,
+        semester: semester ? String(semester).trim() : null,
+        section: section ? normalizeSection(section) : null,
       });
 
       // Class setup (optional): select classes from the 22-class list at
