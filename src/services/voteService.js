@@ -261,7 +261,7 @@ class VoteService {
     // ---- CR path ----
     // Step 6-CR: Verify constituency belongs to election and is active
     const constituencyCheck = await db.query(
-      'SELECT id, election_id, department, year, section, is_active FROM constituencies WHERE id = $1',
+      'SELECT id, election_id, department, year, section, is_active, voting_open FROM constituencies WHERE id = $1',
       [parsedConstituencyId]
     );
 
@@ -280,6 +280,14 @@ class VoteService {
         success: false,
         error: 'Constituency is not active',
         code: 'CONSTITUENCY_INACTIVE',
+        status: 403
+      };
+    }
+    if (!constituency.voting_open) {
+      return {
+        success: false,
+        error: 'Voting has not started for your class yet',
+        code: 'CLASS_NOT_OPEN',
         status: 403
       };
     }
@@ -577,7 +585,7 @@ class VoteService {
 
         // Step 6: constituency belongs to election + active + matches the voter class
         const constituencyCheck = await client.query(
-          'SELECT id, election_id, department, year, section, is_active FROM constituencies WHERE id = $1',
+          'SELECT id, election_id, department, year, section, is_active, voting_open FROM constituencies WHERE id = $1',
           [parsedConstituencyId]
         );
         if (constituencyCheck.rows.length === 0 || constituencyCheck.rows[0].election_id !== parsedElectionId) {
@@ -588,6 +596,10 @@ class VoteService {
         if (!constituency.is_active) {
           await client.query('ROLLBACK');
           return { success: false, error: 'Constituency is not active', code: 'CONSTITUENCY_INACTIVE', status: 403 };
+        }
+        if (!constituency.voting_open) {
+          await client.query('ROLLBACK');
+          return { success: false, error: 'Voting has not started for your class yet', code: 'CLASS_NOT_OPEN', status: 403 };
         }
         const voterIdentity = await client.query(
           'SELECT department, year_or_semester, section FROM students WHERE id = $1',
@@ -740,6 +752,10 @@ class VoteService {
     }
     if (constituency.is_active === false || constituency.isActive === false) {
       return { success: false, error: 'Constituency is not active', code: 'CONSTITUENCY_INACTIVE', status: 403 };
+    }
+    const classVotingOpen = constituency.voting_open === true || constituency.votingOpen === true;
+    if (!classVotingOpen) {
+      return { success: false, error: 'Voting has not started for your class yet', code: 'CLASS_NOT_OPEN', status: 403 };
     }
 
     const match = (a, b) => (a ?? '').toString().trim().toLowerCase() === (b ?? '').toString().trim().toLowerCase();

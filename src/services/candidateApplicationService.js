@@ -329,6 +329,22 @@ try {
                 const ct = constituentById.get(String(pos.constituency_id ?? pos.constituencyId ?? ''));
                 return !!ct;
               });
+              const seenSeatCandidates = new Set();
+              ballotDocs = ballotDocs.filter(doc => {
+                const pos = positionById.get(String(doc.position_id ?? doc.positionId ?? ''));
+                const seatName = pos ? pos.name : (doc.position_name || '');
+                const key = [
+                  String(doc.department ?? '').trim().toLowerCase(),
+                  normalizeYear(doc.year),
+                  String(doc.section ?? '').trim().toLowerCase(),
+                  String(doc.gender ?? '').trim().toLowerCase(),
+                  String(seatName ?? '').trim().toLowerCase(),
+                  String(doc.name ?? '').trim().toLowerCase(),
+                ].join('|');
+                if (seenSeatCandidates.has(key)) return false;
+                seenSeatCandidates.add(key);
+                return true;
+              });
               docs = ballotDocs.map(doc => {
                   const pos = positionById.get(String(doc.position_id ?? doc.positionId ?? ''));
                   const status = 'approved';

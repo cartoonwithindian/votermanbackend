@@ -224,12 +224,17 @@ class ConstituencyController {
 
   /**
    * PATCH /api/v1/admin/constituencies/:id
-   * Update name / is_active (identity fields are immutable).
+   * Update name / is_active / voting_open (identity fields are immutable).
+   *
+   * `voting_open` is the per-class voting switch (Start/Stop Voting) and is a
+   * runtime toggle: it is allowed even while the election is OPEN, because
+   * CR votes only pass when the election is OPEN AND the class flag is true.
+   * Structural changes (name / is_active) stay limited to DRAFT/SCHEDULED.
    */
   async update(req, res, next) {
     try {
       const { id } = req.params;
-      const { name, is_active } = req.body;
+      const { name, is_active, voting_open } = req.body;
 
       if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
         return res.status(400).json({
@@ -247,7 +252,8 @@ class ConstituencyController {
         });
       }
 
-      if (!(await constituencyService.canModify(resolvedId))) {
+      const hasStructuralChange = name !== undefined || is_active !== undefined;
+      if (hasStructuralChange && !(await constituencyService.canModify(resolvedId))) {
         return res.status(403).json({
           error: 'Forbidden',
           message: 'Cannot modify constituency when election is OPEN or CLOSED',
@@ -266,8 +272,14 @@ class ConstituencyController {
           message: 'is_active must be a boolean',
         });
       }
+      if (voting_open !== undefined && typeof voting_open !== 'boolean') {
+        return res.status(400).json({
+          error: 'Validation Error',
+          message: 'voting_open must be a boolean',
+        });
+      }
 
-      const updated = await constituencyService.update(resolvedId, { name, is_active });
+      const updated = await constituencyService.update(resolvedId, { name, is_active, voting_open });
 
       res.json({ data: updated });
     } catch (err) {

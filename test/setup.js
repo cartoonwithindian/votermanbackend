@@ -107,8 +107,8 @@ async function createBaseElection(client) {
     [ELECTION_NAME]
   );
   await client.query(
-    `INSERT INTO constituencies (id, election_id, department, year, section, name, is_active)
-     VALUES (1, 1, 'BCA', '2nd Year', 'A', 'BCA 2nd Year Section A', TRUE)`
+    `INSERT INTO constituencies (id, election_id, department, year, section, name, is_active, voting_open)
+     VALUES (1, 1, 'BCA', '2nd Year', 'A', 'BCA 2nd Year Section A', TRUE, TRUE)`
   );
   await client.query(
     `INSERT INTO positions (id, constituency_id, name, description, display_order, max_selections)

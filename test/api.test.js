@@ -351,6 +351,7 @@ test('CR: my-constituency resolves the student seat from their profile', async (
     section: 'B',
   });
   crConstituencyId = constituency.id;
+  await constituencyService.update(crConstituencyId, { voting_open: true });
   const pos = await db.query('SELECT id FROM positions WHERE constituency_id = $1', [crConstituencyId]);
   assert.ok(pos.rows.length > 0, 'constituency must auto-create its CR position');
   crPositionId = pos.rows[0].id;

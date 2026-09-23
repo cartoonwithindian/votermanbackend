@@ -77,6 +77,7 @@ class ConstituencyService {
           section: d.section ?? '',
           name: d.name,
           is_active: d.is_active ?? d.isActive ?? true,
+          voting_open: d.voting_open ?? d.votingOpen ?? false,
           created_at: d.created_at ?? d.createdAt,
           updated_at: d.updated_at ?? d.updatedAt,
         }));
@@ -151,6 +152,7 @@ class ConstituencyService {
           section: doc.section ?? '',
           name: doc.name,
           is_active: doc.is_active ?? doc.isActive ?? true,
+          voting_open: doc.voting_open ?? doc.votingOpen ?? false,
           created_at: doc.created_at ?? doc.createdAt,
           updated_at: doc.updated_at ?? doc.updatedAt,
         };
@@ -191,6 +193,7 @@ class ConstituencyService {
           section: doc.section ?? '',
           name: doc.name,
           is_active: doc.is_active ?? doc.isActive ?? true,
+          voting_open: doc.voting_open ?? doc.votingOpen ?? false,
           created_at: doc.created_at ?? doc.createdAt,
           updated_at: doc.updated_at ?? doc.updatedAt,
         };
@@ -238,6 +241,7 @@ class ConstituencyService {
             section: String(section).trim(),
             name: name || this.buildName({ department, year, section }),
             is_active: true,
+            voting_open: false,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           };
@@ -255,6 +259,8 @@ class ConstituencyService {
             name: name || this.buildName({ department, year, section }),
             is_active: true,
             isActive: true,
+            voting_open: false,
+            votingOpen: false,
             created_at: new Date(),
             createdAt: new Date(),
             updated_at: new Date(),
@@ -305,6 +311,7 @@ class ConstituencyService {
             section: doc.section,
             name: doc.name,
             is_active: true,
+            voting_open: false,
             created_at: doc.created_at.toISOString(),
             updated_at: doc.updated_at.toISOString(),
           };
@@ -319,6 +326,7 @@ class ConstituencyService {
           section: String(section).trim(),
           name: name || this.buildName({ department, year, section }),
           is_active: true,
+          voting_open: false,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
@@ -368,7 +376,7 @@ class ConstituencyService {
   }
 
   /**
-   * Update a constituency (name / is_active only; identity is immutable).
+   * Update a constituency (name / is_active / voting_open only; identity is immutable).
    */
   async update(id, data) {
     if (isMongoOnly) {
@@ -381,6 +389,7 @@ class ConstituencyService {
           const merged = { ...existing };
           if (data.name !== undefined) merged.name = String(data.name).trim();
           if (data.is_active !== undefined) merged.is_active = Boolean(data.is_active);
+          if (data.voting_open !== undefined) merged.voting_open = Boolean(data.voting_open);
           merged.updated_at = new Date().toISOString();
           return merged;
         }
@@ -389,6 +398,7 @@ class ConstituencyService {
         const updates = {};
         if (data.name !== undefined) updates.name = String(data.name).trim();
         if (data.is_active !== undefined) { updates.is_active = Boolean(data.is_active); updates.isActive = Boolean(data.is_active); }
+        if (data.voting_open !== undefined) { updates.voting_open = Boolean(data.voting_open); updates.votingOpen = Boolean(data.voting_open); }
         updates.updated_at = new Date();
         updates.updatedAt = new Date();
         let res = null;
@@ -400,7 +410,7 @@ class ConstituencyService {
         if (res && res.value) {
           const d = res.value;
           await this.invalidateConstituencies();
-          return { id: d._id ? String(d._id) : d.id, election_id: d.election_id ?? d.electionId, department: d.department, year: d.year, section: d.section ?? '', name: d.name, is_active: d.is_active ?? d.isActive ?? true, created_at: d.created_at ?? d.createdAt, updated_at: d.updated_at ?? d.updatedAt };
+          return { id: d._id ? String(d._id) : d.id, election_id: d.election_id ?? d.electionId, department: d.department, year: d.year, section: d.section ?? '', name: d.name, is_active: d.is_active ?? d.isActive ?? true, voting_open: d.voting_open ?? d.votingOpen ?? false, created_at: d.created_at ?? d.createdAt, updated_at: d.updated_at ?? d.updatedAt };
         }
         return { ...existing, ...updates, id: String(id) };
       } catch (e) {
@@ -410,11 +420,12 @@ class ConstituencyService {
         const merged = { ...existing };
         if (data.name !== undefined) merged.name = String(data.name).trim();
         if (data.is_active !== undefined) merged.is_active = Boolean(data.is_active);
+        if (data.voting_open !== undefined) merged.voting_open = Boolean(data.voting_open);
         merged.updated_at = new Date().toISOString();
         return merged;
       }
     }
-    const { name, is_active } = data;
+    const { name, is_active, voting_open } = data;
 
     const updates = [];
     const params = [];
@@ -428,6 +439,11 @@ class ConstituencyService {
     if (is_active !== undefined) {
       updates.push(`is_active = $${paramIndex}`);
       params.push(Boolean(is_active));
+      paramIndex++;
+    }
+    if (voting_open !== undefined) {
+      updates.push(`voting_open = $${paramIndex}`);
+      params.push(Boolean(voting_open));
       paramIndex++;
     }
 

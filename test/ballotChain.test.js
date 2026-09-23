@@ -34,18 +34,22 @@ let electionId;
 let constA; // BCA 1st Year Section A
 let constB; // BCA 1st Year Section B
 let constC; // MCA 1st Year (section-less)
+let constD; // BCA 1st Year Section C — left closed (voting_open false)
 let posABoys;
 let posAGirls;
 let posBBoys;
 let posCGirls;
+let posDBoys;
 let candABoys;
 let candAGirls;
 let candBBoys;
 let candCGirls;
+let candDBoys;
 
 let studentA; // BCA 1st Year A        (eligible)
 let studentB; // BCA 1st Year B        (eligible)
 let studentC; // MCA 1st Year          (eligible)
+let studentD; // BCA 1st Year C        (eligible, class NOT started)
 let studentIneligible; // same class as A, no authorization
 
 async function insertStudent({ externalId, name, department, year, section, email, votingEligible = true }) {
@@ -79,6 +83,12 @@ test.before(async () => {
   constA = await mkConst('A', 'BCA', '1st Year', 'A');
   constB = await mkConst('B', 'BCA', '1st Year', 'B');
   constC = await mkConst('C', 'MCA', '1st Year', '');
+  constD = await mkConst('D', 'BCA', '1st Year', 'C');
+
+  // Classes start closed by default. Open the ones the suite votes in.
+  for (const c of [constA, constB, constC]) {
+    await constituencyService.update(c.id, { voting_open: true });
+  }
 
   const posOf = async (constituencyId, genderName) => {
     const { rows } = await db.query(
@@ -92,6 +102,7 @@ test.before(async () => {
   posAGirls = await posOf(constA.id, 'Girls');
   posBBoys = await posOf(constB.id, 'Boys');
   posCGirls = await posOf(constC.id, 'Girls');
+  posDBoys = await posOf(constD.id, 'Boys');
 
   const insertCand = async (positionId, name) => {
     const { rows } = await db.query(
@@ -106,6 +117,7 @@ test.before(async () => {
   candAGirls = await insertCand(posAGirls, 'Eligible Girl A');
   candBBoys = await insertCand(posBBoys, 'Other Section Boy B');
   candCGirls = await insertCand(posCGirls, 'Sectionless Girl C');
+  candDBoys = await insertCand(posDBoys, 'Closed Class Boy D');
 
   studentA = await insertStudent({
     externalId: 'BAL_A',
@@ -131,6 +143,14 @@ test.before(async () => {
     section: '',
     email: 'bal_c@ballot.local',
   });
+  studentD = await insertStudent({
+    externalId: 'BAL_D',
+    name: 'Ballet D',
+    department: 'BCA',
+    year: '1st Year',
+    section: 'C',
+    email: 'bal_d@ballot.local',
+  });
   studentIneligible = await insertStudent({
     externalId: 'BAL_X',
     name: 'Ballet X',
@@ -151,6 +171,7 @@ test.before(async () => {
   await grant(studentA);
   await grant(studentB);
   await grant(studentC);
+  // studentD is eligible: authorization not needed (voting_eligible auto-grants).
   // studentIneligible intentionally has no authorization.
 });
 
@@ -162,7 +183,7 @@ test.after(async () => {
     await db.query('DELETE FROM sessions WHERE student_id = $1', [studentId]);
     await db.query('DELETE FROM students WHERE id = $1', [studentId]);
   };
-  for (const s of [studentA, studentB, studentC, studentIneligible]) {
+  for (const s of [studentA, studentB, studentC, studentD, studentIneligible]) {
     await clean(s);
   }
   await db.query(
@@ -402,7 +423,33 @@ test('valid ballot stores all selections and receipts', async () => {
 });
 
 // ------------------------------------------------------------------
-// 13. Election results join through the hierarchy (per-class counts).
+// 13. Closed class: voting_open=false rejects votes (CLASS_NOT_OPEN).
+// ------------------------------------------------------------------
+test('closed class (voting_open=false) rejects votes with CLASS_NOT_OPEN', async () => {
+  const c = await loginAs(studentD);
+  const res = await c.request('POST', `/api/v1/elections/${electionId}/votes`, {
+    body: { election_id: electionId, constituency_id: constD.id, position_id: posDBoys, candidate_id: candDBoys },
+  });
+  assert.equal(res.status, 403, JSON.stringify(res.json));
+  assert.equal(res.json.code, 'CLASS_NOT_OPEN');
+  assert.equal(await countVotes(studentD), 0);
+});
+
+// ------------------------------------------------------------------
+// 14. Admin toggle: opening the class (voting_open=true) permits voting.
+// ------------------------------------------------------------------
+test('admin opens a class (voting_open=true) then votes are accepted', async () => {
+  await constituencyService.update(constD.id, { voting_open: true });
+  const c = await loginAs(studentD);
+  const res = await c.request('POST', `/api/v1/elections/${electionId}/votes`, {
+    body: { election_id: electionId, constituency_id: constD.id, position_id: posDBoys, candidate_id: candDBoys },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.json));
+  assert.equal(await countVotes(studentD), 1);
+});
+
+// ------------------------------------------------------------------
+// 15. Election results join through the hierarchy (per-class counts).
 // ------------------------------------------------------------------
 test('results join candidates/positions/constituencies for the election', async () => {
   const { getElectionResults } = require('../src/services/voteService');
