@@ -75,14 +75,17 @@ class VoteController {
         });
       }
 
-      // Parse IDs
-      const constituencyId = parseToInt(constituency_id);
-      const positionId = parseToInt(position_id);
-      const candidateId = parseToInt(candidate_id);
-      const electionIdInt = parseToInt(electionId);
+      // Parse IDs (Mongo-only keeps hex string ids; Postgres parses ints)
+      const constituencyId = isMongoOnly ? String(constituency_id || '').trim() : parseToInt(constituency_id);
+      const positionId = isMongoOnly ? String(position_id || '').trim() : parseToInt(position_id);
+      const candidateId = isMongoOnly ? String(candidate_id || '').trim() : parseToInt(candidate_id);
+      const electionIdInt = isMongoOnly ? String(electionId || '').trim() : parseToInt(electionId);
 
       // Validate formats
-      if ([positionId, candidateId, electionIdInt].some(isNaN)) {
+      const invalidIds = isMongoOnly
+        ? !constituencyId || !positionId || !candidateId || !electionIdInt
+        : [positionId, candidateId, electionIdInt].some(isNaN);
+      if (invalidIds) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid ID format.',
@@ -144,19 +147,21 @@ class VoteController {
       // If someone tries ?student_id=123, we ignore it and use authenticated identity
       const studentId = authenticatedStudentId;
 
-      const electionIdInt = parseToInt(electionId);
-      if (isNaN(electionIdInt)) {
+      const electionIdInt = isMongoOnly ? String(electionId || '').trim() : parseToInt(electionId);
+      if (isMongoOnly ? !electionIdInt : isNaN(electionIdInt)) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid electionId format.',
         });
       }
 
-      // Parse position_ids if provided
+      // Parse position_ids if provided (Mongo-only keeps hex string ids)
       let positionIdList = null;
       if (position_ids) {
-        positionIdList = position_ids.split(',').map(id => parseInt(id));
-        if (positionIdList.some(isNaN)) {
+        positionIdList = isMongoOnly
+          ? position_ids.split(',').map(id => String(id).trim()).filter(Boolean)
+          : position_ids.split(',').map(id => parseInt(id));
+        if (isMongoOnly ? positionIdList.length === 0 : positionIdList.some(isNaN)) {
           return res.status(400).json({
             error: 'Bad Request',
             message: 'Invalid position_ids format',
@@ -201,8 +206,9 @@ class VoteController {
         });
       }
 
-      const electionIdInt = parseToInt(electionId);
-      if (isNaN(electionIdInt)) {
+      const electionIdInt = isMongoOnly ? String(electionId || '').trim() : parseToInt(electionId);
+
+      if (isMongoOnly ? !electionIdInt : isNaN(electionIdInt)) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid electionId format.',
@@ -295,9 +301,9 @@ class VoteController {
         });
       }
 
-      const electionIdInt = parseToInt(electionId);
+      const electionIdInt = isMongoOnly ? String(electionId || '').trim() : parseToInt(electionId);
 
-      if (isNaN(electionIdInt)) {
+      if (isMongoOnly ? !electionIdInt : isNaN(electionIdInt)) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid ID format.',
@@ -310,7 +316,7 @@ class VoteController {
           const client = await getSharedClient();
           if (client) {
             const col = client.db(getMongoDbName()).collection('vote_receipts');
-            const doc = await col.findOne({ $or: [{ student_id: parseInt(authenticatedStudentId), election_id: parseInt(electionIdInt) }, { studentId: parseInt(authenticatedStudentId), electionId: parseInt(electionIdInt) }] }, { sort: { created_at: -1, createdAt: -1 } });
+            const doc = await col.findOne({ $or: [{ student_id: String(authenticatedStudentId), election_id: String(electionIdInt) }, { studentId: String(authenticatedStudentId), electionId: String(electionIdInt) }, { student_id: parseInt(authenticatedStudentId), election_id: parseInt(electionIdInt) }, { studentId: parseInt(authenticatedStudentId), electionId: parseInt(electionIdInt) }] }, { sort: { created_at: -1, createdAt: -1 } });
             if (doc) {
               return res.json({ data: { receipt: { receiptId: doc._id ? String(doc._id) : doc.id, receiptHash: doc.receipt_hash ?? doc.receiptHash, nullifier: doc.nullifier, createdAt: doc.created_at ?? doc.createdAt } } });
             }
@@ -375,10 +381,10 @@ class VoteController {
         });
       }
 
-      const electionIdInt = parseToInt(electionId);
-      const voteIdInt = parseToInt(voteId);
+      const electionIdInt = isMongoOnly ? String(electionId || '').trim() : parseToInt(electionId);
+      const voteIdInt = isMongoOnly ? String(voteId || '').trim() : parseToInt(voteId);
 
-      if (isNaN(electionIdInt) || isNaN(voteIdInt)) {
+      if (isMongoOnly ? (!electionIdInt || !voteIdInt) : (isNaN(electionIdInt) || isNaN(voteIdInt))) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Invalid ID format.',
@@ -396,7 +402,11 @@ class VoteController {
             if (!vote) vote = await votesCol.findOne({ $or: [{ _id: String(voteIdInt) }, { id: String(voteIdInt) }] });
             if (!vote) return res.status(404).json({ error: 'Not Found', message: 'Vote not found.', code: 'VOTE_NOT_FOUND' });
             const vidStudent = vote.student_id ?? vote.studentId;
-            if (parseInt(vidStudent) !== parseInt(authenticatedStudentId)) return res.status(403).json({ error: 'Forbidden', message: 'Cannot access another student\'s vote receipt.', code: 'ACCESS_DENIED' });
+            const ownsVote = vidStudent != null && (
+              String(vidStudent) === String(authenticatedStudentId) ||
+              parseInt(vidStudent) === parseInt(authenticatedStudentId)
+            );
+            if (!ownsVote) return res.status(403).json({ error: 'Forbidden', message: 'Cannot access another student\'s vote receipt.', code: 'ACCESS_DENIED' });
             const recCol = client.db(getMongoDbName()).collection('vote_receipts');
             let rec = null;
             try { if (ObjectId.isValid(String(voteIdInt))) rec = await recCol.findOne({ vote_id: vote._id }); } catch (_) {}

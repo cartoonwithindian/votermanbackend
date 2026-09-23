@@ -40,26 +40,27 @@ class VoteService {
           ).catch(() => {});
           // Minimal validation: check duplicate vote in Mongo
           const existing = await votesCol.findOne({
-            studentId: parseInt(studentId),
-            electionId: parseInt(electionId),
-            positionId: parseInt(positionId),
+            $or: [
+              { studentId: String(studentId), electionId: String(electionId), positionId: String(positionId) },
+              { student_id: String(studentId), election_id: String(electionId), position_id: String(positionId) },
+            ],
           });
           if (existing) {
             return { success: false, error: 'You have already voted for this position', code: 'ALREADY_VOTED', status: 409 };
           }
-          // Insert dummy vote in Mongo to allow student flow without Postgres
+          // Insert vote in Mongo (string hex ids; Postgres-compatible ints stored too)
           const now = new Date();
           const mockVote = {
-            student_id: parseInt(studentId),
-            studentId: parseInt(studentId),
-            election_id: parseInt(electionId),
-            electionId: parseInt(electionId),
-            constituency_id: constituencyId ? parseInt(constituencyId) : null,
-            constituencyId: constituencyId ? parseInt(constituencyId) : null,
-            position_id: parseInt(positionId),
-            positionId: parseInt(positionId),
-            candidate_id: parseInt(candidateId),
-            candidateId: parseInt(candidateId),
+            student_id: String(studentId),
+            studentId: String(studentId),
+            election_id: String(electionId),
+            electionId: String(electionId),
+            constituency_id: constituencyId ? String(constituencyId) : null,
+            constituencyId: constituencyId ? String(constituencyId) : null,
+            position_id: String(positionId),
+            positionId: String(positionId),
+            candidate_id: String(candidateId),
+            candidateId: String(candidateId),
             voted_at: now,
             createdAt: now,
           };
@@ -452,7 +453,7 @@ class VoteService {
         if (client) {
           const col = client.db(getMongoDbName()).collection('votes');
           const pipeline = [
-            { $match: { $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }] } },
+            { $match: { $or: [{ election_id: String(electionId) }, { electionId: String(electionId) }, { election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }] } },
             { $group: { _id: '$candidate_id', candidate_id: { $first: '$candidate_id' }, position_id: { $first: '$position_id' }, vote_count: { $sum: 1 } } },
           ];
           const docs = await col.aggregate(pipeline).toArray();
@@ -496,7 +497,7 @@ class VoteService {
         if (client) {
           const col = client.db(getMongoDbName()).collection('votes');
           const docs = await col.aggregate([
-            { $match: { $or: [{ election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }], $or: [{ position_id: parseInt(positionId) }, { positionId: parseInt(positionId) }] } },
+            { $match: { $or: [{ election_id: String(electionId) }, { electionId: String(electionId) }, { election_id: parseInt(electionId) }, { electionId: parseInt(electionId) }], $or: [{ position_id: String(positionId) }, { positionId: String(positionId) }, { position_id: parseInt(positionId) }, { positionId: parseInt(positionId) }] } },
             { $group: { _id: '$candidate_id', candidate_id: { $first: '$candidate_id' }, candidate_name: { $first: '$candidate_name' }, vote_count: { $sum: 1 } } },
           ]).toArray();
           return docs.map(d => ({ candidate_id: d.candidate_id, candidate_name: d.candidate_name || `Candidate ${d.candidate_id}`, vote_count: String(d.vote_count) }));
@@ -729,24 +730,28 @@ class VoteService {
         const client = await getSharedClient();
         if (client) {
           const col = client.db(getMongoDbName()).collection('votes');
-          const filter = { $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] };
-          if (positionIdList) {
-            filter.$or = filter.$or.map(f => ({ ...f, position_id: { $in: positionIdList.map(Number) } }));
-            // simplified: query by student+election then filter in JS
-            const docs = await col.find({ studentId: parseInt(studentId), electionId: parseInt(electionId) }).toArray();
-            const votedPositions = [...new Set(docs.map(d => d.positionId ?? d.position_id).filter(Boolean))].filter(id => !positionIdList || positionIdList.includes(id));
-            const filtered = positionIdList ? votedPositions.filter(id => positionIdList.includes(id)) : votedPositions;
-            return { votedPositions: filtered, canVote: positionIdList ? filtered.length < positionIdList.length : true };
-          }
-          const docs = await col.find({ $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] }).toArray();
-          const votedPositions = [...new Set(docs.map(d => d.position_id ?? d.positionId).filter(Boolean))];
-          return { votedPositions, canVote: positionIdList ? positionIdList.filter(id => !votedPositions.includes(id)).length > 0 : true };
+          const studentStr = String(studentId);
+          const electionStr = String(electionId);
+          const baseFilter = { $or: [
+            { student_id: studentStr, election_id: electionStr },
+            { studentId: studentStr, electionId: electionStr },
+            { student_id: parseInt(studentStr), election_id: parseInt(electionStr) },
+            { studentId: parseInt(studentStr), electionId: parseInt(electionStr) },
+          ] };
+          const docs = await col.find(baseFilter).toArray();
+          const votedPositions = [...new Set(docs.map(d => d.position_id ?? d.positionId).filter(Boolean).map(String))];
+          return {
+            votedPositions,
+            canVote: positionIdList
+              ? positionIdList.some(id => !votedPositions.includes(String(id)))
+              : true,
+          };
         }
       } catch (e) {
         console.warn('voteService.checkVotes mongo fallback failed:', e.message);
       }
       // Fallback: no votes recorded (empty) so portal loads without 500
-      return { votedPositions: [], canVote: true };
+      return { votedPositions: [], canVote: !positionIdList || positionIdList.length > 0 };
     }
     let query = `
       SELECT DISTINCT position_id
