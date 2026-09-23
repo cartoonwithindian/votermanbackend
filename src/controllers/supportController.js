@@ -9,6 +9,7 @@
  */
 
 const supportService = require('../services/supportService');
+const { resolveId } = require('../utils/idResolver');
 const { sanitizeString, validateLength } = require('../lib/sanitize');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -134,7 +135,7 @@ class SupportController {
 
       const { id } = req.params;
 
-      const lookupId = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const lookupId = resolveId(id);
       const request = await supportService.getById(lookupId);
 
       if (!request) {

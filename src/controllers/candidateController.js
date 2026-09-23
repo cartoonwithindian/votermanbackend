@@ -17,6 +17,7 @@ const positionService = require('../services/positionService');
 const electionService = require('../services/electionService');
 const { normalizeYear } = require('../utils/yearNormalizer');
 const { pickCrSeat, isSingleGenderClass } = require('../utils/crSeat');
+const { resolveId } = require('../utils/idResolver');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class CandidateController {
@@ -93,7 +94,7 @@ class CandidateController {
         });
       }
 
-      const lookupId = isMongoOnly ? String(id).trim() : parseInt(id);
+      const lookupId = resolveId(id);
       const candidate = await candidateService.findApprovedById(lookupId);
 
       if (!candidate) {
@@ -136,7 +137,7 @@ class CandidateController {
         });
       }
 
-      const pid = isMongoOnly && isNaN(parseInt(positionId)) ? positionId : parseInt(positionId);
+      const pid = resolveId(positionId);
       const candidates = await candidateService.findByPositionId(pid, {
         activeOnly: active_only !== 'false',
         limit: parseInt(limit) || 100,
@@ -184,7 +185,7 @@ class CandidateController {
 
       let app = null;
       if (isApplicationEdit) {
-        const targetId = isMongoOnly ? String(applicationId) : parseInt(applicationId);
+        const targetId = resolveId(applicationId);
         app = await candidateAppService.getById(targetId);
       }
       if (app) {
@@ -195,7 +196,7 @@ class CandidateController {
             message: 'Cannot modify candidate when election is CLOSED',
           });
         }
-        const targetId = isMongoOnly ? String(app.id) : parseInt(app.id);
+        const targetId = resolveId(app.id);
         const updated = await candidateAppService.adminUpdateContent(targetId, {
           fullName: name,
           bio: bio !== undefined ? bio : description,
@@ -211,7 +212,7 @@ class CandidateController {
 
       // Check election state - allow modification unless CLOSED (server still
       // guards via requireAdmin on the routes).
-      const status = await candidateService.getElectionStatusByPositionId(isMongoOnly ? String(id) : parseInt(id));
+      const status = await candidateService.getElectionStatusByPositionId(resolveId(id));
       if (status === 'CLOSED') {
         return res.status(403).json({
           error: 'Forbidden',
@@ -219,7 +220,7 @@ class CandidateController {
         });
       }
 
-      const candidate = await candidateService.update(isMongoOnly ? id : parseInt(id), {
+      const candidate = await candidateService.update(resolveId(id), {
         name,
         description: bio !== undefined ? bio : description,
         image_url,
@@ -419,7 +420,7 @@ class CandidateController {
       if (!id || (!isMongoOnly && isNaN(parseInt(id)))) {
         return res.status(400).json({ error: 'Bad Request', message: 'Invalid candidate ID' });
       }
-      const targetId = isMongoOnly ? id : parseInt(id);
+      const targetId = resolveId(id);
       const deleted = await candidateService.deleteById(targetId);
       if (!deleted) {
         return res.status(404).json({ error: 'Not Found', message: 'Candidate not found' });

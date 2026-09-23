@@ -13,13 +13,8 @@ const candidateAppService = require('../services/candidateApplicationService');
 const masterCandidateMatcher = require('../services/masterCandidateMatcher');
 const electionService = require('../services/electionService');
 const positionService = require('../services/positionService');
-const { ObjectId } = require('mongodb');
+const { resolveId } = require('../utils/idResolver');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
-
-const resolveId = (raw) => {
-  if (isMongoOnly && raw && ObjectId.isValid(String(raw))) return String(raw);
-  return parseInt(raw, 10);
-};
 
 class ConstituencyController {
   /**

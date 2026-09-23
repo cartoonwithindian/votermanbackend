@@ -15,6 +15,7 @@ const { normalizeYear } = require('../utils/yearNormalizer');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { ObjectId } = require('mongodb');
 const { getClient: getSharedClient } = require('../db/mongoClient');
+const { resolveId } = require('../utils/idResolver');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -559,10 +560,9 @@ class VoteController {
   }
 }
 
-// Helper to safely parse int
+// Helper to safely handle an id (numeric strings parse to ints, Mongo hex stays)
 function parseToInt(val) {
-  const parsed = parseInt(val);
-  return isNaN(parsed) ? val : parsed;
+  return resolveId(val);
 }
 
 module.exports = new VoteController();

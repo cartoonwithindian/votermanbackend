@@ -4,6 +4,7 @@
  */
 
 const announcementService = require('../services/announcementService');
+const { resolveId } = require('../utils/idResolver');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class AnnouncementController {
@@ -40,7 +41,7 @@ class AnnouncementController {
   async get(req, res, next) {
     try {
       const { id } = req.params;
-      const lookupId = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const lookupId = resolveId(id);
       const announcement = await announcementService.getById(lookupId, true);
 
       if (!announcement) {

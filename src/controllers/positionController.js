@@ -5,6 +5,7 @@
 
 const positionService = require('../services/positionService');
 const constituencyService = require('../services/constituencyService');
+const { resolveId } = require('../utils/idResolver');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -86,7 +87,7 @@ class PositionController {
       } else {
         try {
           // Try Mongo-aware check but tolerate missing constituency — return [] instead of 404/500
-          const cid = isNaN(parseInt(constituencyId)) ? constituencyId : parseInt(constituencyId);
+          const cid = resolveId(constituencyId);
           const constituency = await constituencyService.findById(cid).catch(() => null);
           if (!constituency) {
             // Constituency not in Mongo yet — still return empty positions list, not 404, so ballot loads
@@ -102,7 +103,7 @@ class PositionController {
         }
       }
 
-      const cid = isMongoOnly && isNaN(parseInt(constituencyId)) ? constituencyId : parseInt(constituencyId);
+      const cid = resolveId(constituencyId);
       const positions = await positionService.findByConstituencyId(cid, {
         activeOnly: active_only !== 'false',
         limit: parseInt(limit) || 100,
@@ -172,7 +173,7 @@ class PositionController {
         });
       }
 
-      const cid = isMongoOnly && isNaN(parseInt(constituencyId)) ? constituencyId : parseInt(constituencyId);
+      const cid = resolveId(constituencyId);
 
       // Verify constituency exists — Mongo-only: swallow error, allow create
       if (!isMongoOnly) {
@@ -252,7 +253,7 @@ class PositionController {
         return res.status(400).json({ error: 'Bad Request', message: 'Invalid position ID' });
       }
 
-      const pid = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const pid = resolveId(id);
       const position = await positionService.findById(pid);
 
       if (!position) {
@@ -315,7 +316,7 @@ class PositionController {
         });
       }
 
-      const pid = isMongoOnly && isNaN(parseInt(id)) ? id : parseInt(id);
+      const pid = resolveId(id);
       // Check if position exists
       const existingPosition = await positionService.findById(pid);
       if (!existingPosition) {
