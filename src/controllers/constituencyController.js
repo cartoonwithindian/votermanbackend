@@ -10,6 +10,7 @@
 
 const constituencyService = require('../services/constituencyService');
 const candidateAppService = require('../services/candidateApplicationService');
+const masterCandidateMatcher = require('../services/masterCandidateMatcher');
 const electionService = require('../services/electionService');
 const positionService = require('../services/positionService');
 const { ObjectId } = require('mongodb');
@@ -196,7 +197,20 @@ class ConstituencyController {
         console.warn('create constituency: auto ballot placement failed', { electionId: election_id, code: err.code || err.message });
       }
 
-      res.status(201).json({ data: constituency, meta: { autoPlaced } });
+      // Auto-match master candidates from data/candidates.json for this class.
+      // Gender-preferring seat selection; never overwrites existing candidates.
+      let matched = [];
+      try {
+        const outcome = await masterCandidateMatcher.matchClassForElection(
+          resolvedElectionId,
+          { department, year, section }
+        );
+        matched = outcome.placed || [];
+      } catch (err) {
+        console.warn('create constituency: master candidate auto-match failed', { electionId: election_id, code: err.code || err.message });
+      }
+
+      res.status(201).json({ data: constituency, meta: { autoPlaced, matched } });
     } catch (err) {
       if (err.code === '23505') {
         return res.status(409).json({

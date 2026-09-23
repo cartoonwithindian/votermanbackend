@@ -16,6 +16,7 @@ const constituencyService = require('../services/constituencyService');
 const positionService = require('../services/positionService');
 const electionService = require('../services/electionService');
 const { normalizeYear } = require('../utils/yearNormalizer');
+const { pickCrSeat, isSingleGenderClass } = require('../utils/crSeat');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 class CandidateController {
@@ -308,6 +309,23 @@ class CandidateController {
       const added = [];
       const skipped = [];
       const cohorts = {};
+      const seatCounts = {};
+      const cohortSpread = {};
+
+      // Precompute single-gender (spread) per cohort so a class with only
+      // girls / only boys tiles its candidates across both CR seats.
+      for (const c of raw) {
+        const department = String(c.department || c.Department || '').trim();
+        const year = normalizeYear(c.year || c.Year) || '';
+        const section = String(c.section ?? c.Section ?? '').trim();
+        if (!department || !year) continue;
+        const key = [String(electionId), department, year, section].join('|');
+        if (!cohortSpread[key]) cohortSpread[key] = [];
+        cohortSpread[key].push(c);
+      }
+      for (const key of Object.keys(cohortSpread)) {
+        cohortSpread[key] = isSingleGenderClass(cohortSpread[key]);
+      }
 
       for (const c of raw) {
         const name = String(c.fullName || c.FullName || c.name || '').trim();
@@ -331,6 +349,7 @@ class CandidateController {
             constituency = await constituencyService.create({ electionId, department, year, section });
           }
           cohorts[cohortKey] = constituency || null;
+          if (constituency && constituency.id) seatCounts[String(constituency.id)] = {};
         }
         const constituency = cohorts[cohortKey];
         if (!constituency || !constituency.id) {
@@ -339,7 +358,10 @@ class CandidateController {
         }
 
         const positions = await positionService.findByConstituencyId(constituency.id);
-        const seat = this.getCrSeat(positions, c);
+        const seat = this.getCrSeat(positions, c, {
+          seatCounts: seatCounts[String(constituency.id)],
+          spread: cohortSpread[cohortKey],
+        });
         if (!seat || !seat.id) {
           skipped.push({ name, reason: 'invalid seat' });
           continue;
@@ -361,6 +383,7 @@ class CandidateController {
           gender: c.gender || null,
         });
 
+        seatCounts[String(constituency.id)][seat.id] = (seatCounts[String(constituency.id)][seat.id] || 0) + 1;
         added.push({
           id: created.id,
           name,
@@ -385,22 +408,8 @@ class CandidateController {
     } catch (e) { next(e); }
   }
 
-  getCrSeat(positions, cand) {
-    const candGender = String(cand.gender || '').trim().toLowerCase();
-    const candPos = String(cand.position || cand.position_name || '');
-    const wantGirl = candGender === 'female' || candGender === 'f' || /girl|female/i.test(candPos);
-    const seats = Array.isArray(positions) ? positions.filter(p => p && p.id != null) : [];
-    if (wantGirl) {
-      return seats.find(p => /girl|female/i.test(String(p.name || '')))
-        || seats.find(p => String(p.gender || '').toLowerCase() === 'female')
-        || seats[seats.length - 1]
-        || null;
-    }
-    return seats.find(p => /boy|male/i.test(String(p.name || '')) && !/girl|female/i.test(String(p.name || '')))
-      || seats.find(p => String(p.gender || '').toLowerCase() === 'male')
-      || seats.find(p => !/girl|female/i.test(String(p.name || '')) && String(p.gender || '').toLowerCase() !== 'female')
-      || seats[0]
-      || null;
+  getCrSeat(positions, cand, opts) {
+    return pickCrSeat(positions, cand, opts);
   }
 
   async removeBallotCandidate(req, res, next) {

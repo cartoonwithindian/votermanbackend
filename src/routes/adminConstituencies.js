@@ -8,6 +8,9 @@ const express = require('express');
 const router = express.Router();
 const constituencyController = require('../controllers/constituencyController');
 const constituencyService = require('../services/constituencyService');
+const masterCandidateMatcher = require('../services/masterCandidateMatcher');
+const { normalizeDepartment, normalizeSection } = require('../utils/classList');
+const { normalizeYear } = require('../utils/yearNormalizer');
 const { csrfProtection } = require('../middleware/csrfProtection');
 const { ObjectId } = require('mongodb');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
@@ -41,10 +44,13 @@ router.post('/bulk', csrfProtection, async (req, res) => {
     }
     const created = [];
     const skipped = [];
+    const matched = [];
     for (const cls of classes) {
-      const { department, year, section = '' } = cls;
+      const department = normalizeDepartment(cls.department);
+      const year = normalizeYear(cls.year) || String(cls.year || '').trim();
+      const section = normalizeSection(cls.section);
       if (!department || !year) {
-        skipped.push({ department, year, section, reason: 'missing department or year' });
+        skipped.push({ department: cls.department, year: cls.year, section, reason: 'missing department or year' });
         continue;
       }
       const existing = await constituencyService.findMatching({
@@ -59,11 +65,26 @@ router.post('/bulk', csrfProtection, async (req, res) => {
           electionId: resolvedElectionId, department, year, section,
         });
         created.push(c);
+        // Auto-match master candidates for this class onto its CR seats.
+        try {
+          const outcome = await masterCandidateMatcher.matchClassForElection(
+            resolvedElectionId,
+            { department, year, section }
+          );
+          if (outcome.placed && outcome.placed.length) {
+            matched.push({
+              department, year, section,
+              placed: outcome.placed.map(p => ({ id: p.id, name: p.name, position_name: p.position_name })),
+            });
+          }
+        } catch (err) {
+          console.warn('bulk create: master auto-match failed', { department, year, code: err.code || err.message });
+        }
       } catch (err) {
         skipped.push({ department, year, section, reason: err.message });
       }
     }
-    return res.status(201).json({ data: { created, skipped, total: created.length + skipped.length } });
+    return res.status(201).json({ data: { created, skipped, matched, total: created.length + skipped.length } });
   } catch (err) {
     console.error('bulk constituency create failed:', err);
     return res.status(500).json({ error: 'Internal Server Error', message: 'Could not create constituencies.' });

@@ -5,6 +5,9 @@
 
 const electionService = require('../services/electionService');
 const candidateAppService = require('../services/candidateApplicationService');
+const masterCandidateMatcher = require('../services/masterCandidateMatcher');
+const { normalizeDepartment, normalizeSection } = require('../utils/classList');
+const { normalizeYear } = require('../utils/yearNormalizer');
 const { auditLog } = require('../db');
 const { ObjectId } = require('mongodb');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
@@ -113,7 +116,7 @@ class ElectionController {
    */
   async create(req, res, next) {
     try {
-      const { name, description, start_time, end_time } = req.body;
+      const { name, description, start_time, end_time, classes } = req.body;
 
       // Validate required fields
       if (!name || typeof name !== 'string' || name.trim() === '') {
@@ -171,6 +174,44 @@ class ElectionController {
         end_time: end_time ? new Date(end_time).toISOString() : null,
       });
 
+      // Class setup (optional): select classes from the 22-class list at
+      // creation time. Each class gets its two CR seats via
+      // constituencyService.create; master candidates are auto-matched onto
+      // them. Idempotent — an election id that already has the class reuses it.
+      const classSetup = {
+        requested: Array.isArray(classes) ? classes.length : 0,
+        created: [],
+        placed: 0,
+        skipped: 0,
+      };
+      if (Array.isArray(classes) && classes.length > 0) {
+        const electionId = String(election.id ?? election._id ?? election.postgresId ?? election.id);
+        const seen = new Set();
+        for (const cls of classes) {
+          const department = normalizeDepartment(cls.department);
+          const year = normalizeYear(cls.year) || String(cls.year || '').trim();
+          const section = normalizeSection(cls.section);
+          if (!department || !year) continue;
+          const key = `${department}|${year}|${section}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          try {
+            const outcome = await masterCandidateMatcher.matchClassForElection(
+              electionId,
+              { department, year, section }
+            );
+            if (outcome.constituency) {
+              classSetup.created.push({ department, year, section, constituencyId: outcome.constituency.id });
+            }
+            classSetup.placed += (outcome.placed || []).length;
+            classSetup.skipped += (outcome.skipped || []).length;
+          } catch (err) {
+            console.warn('[electionController] class setup failed', { department, year, section, code: err.code || err.message });
+            classSetup.skipped += 1;
+          }
+        }
+      }
+
       // Audit log: election created
       await auditLog('ELECTION_CREATED', {
         electionId: election.id,
@@ -181,7 +222,7 @@ class ElectionController {
         userAgent: req.get('User-Agent'),
       });
 
-      res.status(201).json({ data: election });
+      res.status(201).json({ data: election, class_setup: classSetup });
     } catch (err) {
       next(err);
     }
