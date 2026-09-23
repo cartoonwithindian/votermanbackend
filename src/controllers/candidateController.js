@@ -43,10 +43,14 @@ class CandidateController {
       // Unauthenticated consumers (and authed rows missing class data) keep
       // the previous optional filters.
       const u = req.user;
-      const hasOwnClass = Boolean(u && u.department && u.year && u.section);
+      // Section-less courses (MBA, MCA, BCom) store section as "" — a student
+      // with department + year on file must still be scoped to their own
+      // cohort, never browse other courses/years/sections. An empty section is
+      // a valid class value, so only department + year are required.
+      const hasOwnClass = Boolean(u && u.department && u.year);
       const department = hasOwnClass ? u.department : req.query.department;
       const year = hasOwnClass ? u.year : req.query.year;
-      const section = hasOwnClass ? u.section : req.query.section;
+      const section = hasOwnClass ? (u.section ?? '') : req.query.section;
 
       const candidates = await candidateService.findApproved({
         activeOnly: active_only !== 'false',

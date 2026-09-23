@@ -443,13 +443,15 @@ class AuthorizationService {
             const authCol = client.db(dbName).collection('voter_authorizations');
             const auth = await authCol.findOne({ $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }, { student_id: String(studentId), election_id: String(electionId) }] });
             if (!auth || !(auth.is_authorized ?? auth.isAuthorized)) {
-              // Also check voting_eligible flag on student as fallback (Mongo-only mode voting is permissive)
+              // Fallback: admin-marked voting-eligible students qualify. NOT
+              // isActive alone — an active student without the eligibility
+              // toggle is NOT authorized (mirrors Postgres rule).
               const sCol = client.db(dbName).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
               let studentDoc = null;
               try { if (ObjectId.isValid(String(studentId))) studentDoc = await sCol.findOne({ _id: new ObjectId(String(studentId)) }); } catch (_) {}
-              if (!studentDoc) studentDoc = await sCol.findOne({ $or: [{ postgresId: parseInt(studentId) }, { id: String(studentId) }] });
-              if (studentDoc && (studentDoc.votingEligible ?? studentDoc.voting_eligible ?? studentDoc.isActive)) {
-                return { eligible: true, reason: 'AUTHORIZED', message: 'Student is authorized (Mongo-only fallback)', student_id: studentId, election_id: electionId, election_status: status, authorized_clubs: [], full_access: true };
+              if (!studentDoc) studentDoc = await sCol.findOne({ $or: [{ postgresId: parseInt(studentId) }, { id: String(studentId) }, { _id: String(studentId) }] });
+              if (studentDoc && (studentDoc.votingEligible ?? studentDoc.voting_eligible) === true) {
+                return { eligible: true, reason: 'AUTHORIZED', message: 'Student is eligible and active', student_id: studentId, election_id: electionId, election_status: status, authorized_clubs: [], full_access: true };
               }
               return { eligible: false, reason: 'NOT_AUTHORIZED', message: 'Student is not authorized for this election', student_id: studentId, election_id: electionId };
             }

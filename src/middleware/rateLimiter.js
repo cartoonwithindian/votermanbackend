@@ -62,7 +62,7 @@ const registerLimiter = rateLimit({
  */
 const voteLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  limit: 10,
+  limit: parseInt(process.env.VOTE_LIMIT_MAX, 10) || 10,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: {

@@ -122,6 +122,80 @@ class VoteController {
   }
 
   /**
+   * POST /api/v1/elections/:electionId/votes/ballot
+   * Submit an atomic ballot of position/candidate selections for the SAME
+   * election and constituency.
+   *
+   * Security: identity from session only; all selections validated against
+   * the authenticated student's own class; commit is all-or-nothing.
+   */
+  async submitBallot(req, res, next) {
+    try {
+      const { electionId } = req.params;
+      const { constituency_id, selections } = req.body;
+
+      const authenticatedStudentId = req.user?.studentId;
+      if (!authenticatedStudentId) {
+        return res.status(401).json({
+          error: 'Unauthorized',
+          message: 'Authentication required.',
+          code: 'AUTH_REQUIRED',
+        });
+      }
+
+      const { student_id: bodyStudentId } = req.body || {};
+      if (bodyStudentId && bodyStudentId !== authenticatedStudentId) {
+        return res.status(403).json({
+          error: 'Forbidden',
+          message: 'Cannot vote as another student.',
+          code: 'IMPERSONATION_ATTEMPT',
+        });
+      }
+
+      if (!constituency_id) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'constituency_id is required.',
+        });
+      }
+
+      const electionIdParsed = isMongoOnly ? String(electionId || '').trim() : parseToInt(electionId);
+      const constituencyId = isMongoOnly ? String(constituency_id || '').trim() : parseToInt(constituency_id);
+      if (isMongoOnly ? !electionIdParsed : isNaN(electionIdParsed)) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Invalid electionId format.',
+        });
+      }
+
+      const result = await voteService.castBallot({
+        studentId: authenticatedStudentId,
+        electionId: electionIdParsed,
+        constituencyId,
+        selections,
+      });
+
+      if (!result.success) {
+        return res.status(result.status).json({
+          error: result.error,
+          code: result.code,
+        });
+      }
+
+      res.status(201).json({
+        data: {
+          success: true,
+          message: 'Ballot recorded successfully.',
+          count: result.votes.length,
+          receipts: result.receipts,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
    * GET /api/v1/elections/:electionId/votes/check
    * Check if the authenticated student has voted in this election
    *

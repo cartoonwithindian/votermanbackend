@@ -8,6 +8,7 @@ const router = express.Router();
 const receiptService = require('../services/receiptService');
 const { loadSession } = require('../middleware/loadSession');
 const { requireAuth } = require('../middleware/requireAuth');
+const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
 /**
  * GET /api/v1/receipts/me/:electionId
@@ -30,8 +31,10 @@ router.get('/me/:electionId', loadSession, requireAuth, async (req, res, next) =
       });
     }
 
-    const parsedElectionId = parseInt(electionId, 10);
-    if (isNaN(parsedElectionId)) {
+    // In Mongo-only, election ids may be hex/ObjectId strings — pass through
+    // untouched. In Postgres they are integers.
+    const parsedElectionId = isMongoOnly ? String(electionId || '').trim() : parseInt(electionId, 10);
+    if (isMongoOnly ? !parsedElectionId : isNaN(parsedElectionId)) {
       return res.status(400).json({
         error: 'Bad Request',
         message: 'Invalid election ID.',

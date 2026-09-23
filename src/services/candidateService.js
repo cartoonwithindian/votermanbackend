@@ -627,7 +627,33 @@ class CandidateService {
    * Get election status by position ID
    */
   async getElectionStatusByPositionId(positionId) {
-    if (isMongoOnly) return 'DRAFT';
+    if (isMongoOnly) {
+      try {
+        const dbc = await getSharedDb();
+        if (dbc) {
+          const { ObjectId } = require('mongodb');
+          const positionsCol = dbc.collection('positions');
+          let pos = null;
+          try { if (ObjectId.isValid(String(positionId))) pos = await positionsCol.findOne({ _id: new ObjectId(String(positionId)) }); } catch (_) {}
+          if (!pos) pos = await positionsCol.findOne({ $or: [{ _id: String(positionId) }, { id: String(positionId) }, { postgresId: Number(positionId) }] });
+          if (!pos) return null;
+          const constituencyId = pos.constituency_id ?? pos.constituencyId;
+          const constituenciesCol = dbc.collection('constituencies');
+          let ct = null;
+          try { if (ObjectId.isValid(String(constituencyId))) ct = await constituenciesCol.findOne({ _id: new ObjectId(String(constituencyId)) }); } catch (_) {}
+          if (!ct) ct = await constituenciesCol.findOne({ $or: [{ _id: String(constituencyId) }, { id: String(constituencyId) }, { postgresId: Number(constituencyId) }] });
+          if (!ct) return null;
+          const electionId = ct.election_id ?? ct.electionId;
+          const electionService = require('./electionService');
+          const election = await electionService.findById(electionId);
+          return election?.status || null;
+        }
+      } catch (e) {
+        console.warn('[candidateService] getElectionStatusByPositionId Mongo lookup failed:', e.message);
+        return null;
+      }
+      return null;
+    }
     const result = await db.query(
       `SELECT e.status FROM elections e
        JOIN constituencies ct ON ct.election_id = e.id
@@ -642,7 +668,6 @@ class CandidateService {
    * Check if candidate can be modified based on election state
    */
   async canModify(candidateId) {
-    if (isMongoOnly) return true;
     const candidate = await this.findByIdSimple(candidateId);
     if (!candidate) return false;
 
@@ -654,7 +679,6 @@ class CandidateService {
    * Check if candidate can be created for a position based on election state
    */
   async canCreate(positionId) {
-    if (isMongoOnly) return true;
     const status = await this.getElectionStatusByPositionId(positionId);
     return status === 'DRAFT' || status === 'SCHEDULED';
   }

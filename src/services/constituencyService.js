@@ -244,7 +244,9 @@ class ConstituencyService {
         }
         const dbName = getMongoDbName();
         const col = client.db(dbName).collection(process.env.MONGODB_CONSTITUENCIES_COLLECTION || 'constituencies');
-          const doc = {
+        await col.createIndex({ election_id: 1, department: 1, year: 1, section: 1 }, { unique: true, background: true }).catch(() => {});
+        await col.createIndex({ electionId: 1, department: 1, year: 1, section: 1 }, { unique: true, background: true }).catch(() => {});
+        const doc = {
             election_id: electionId,
             electionId: electionId,
             department: String(department).trim(),
@@ -258,7 +260,18 @@ class ConstituencyService {
             updated_at: new Date(),
             updatedAt: new Date(),
           };
-          const res = await col.insertOne(doc);
+          let res;
+          try {
+            res = await col.insertOne(doc);
+          } catch (insertErr) {
+            if (insertErr && insertErr.code === 11000) {
+              const dupError = new Error('A constituency for this class already exists in this election.');
+              dupError.code = 'DUPLICATE_CONSTITUENCY';
+              dupError.status = 409;
+              throw dupError;
+            }
+            throw insertErr;
+          }
           const constituencyId = String(res.insertedId);
           // Auto-create Boy/Girl CR positions in Mongo too (best-effort)
           try {
@@ -296,6 +309,7 @@ class ConstituencyService {
             updated_at: doc.updated_at.toISOString(),
           };
       } catch (e) {
+        if (e.code === 'DUPLICATE_CONSTITUENCY' || e.code === 'VALIDATION') throw e;
         console.warn('[constituencyService] Mongo-only create fallback to mock:', e.message);
         return {
           id: `mock-${Date.now()}`,
@@ -501,7 +515,6 @@ class ConstituencyService {
    * Can a constituency (and its position) be modified? Only in DRAFT/SCHEDULED.
    */
   async canModify(constituencyId) {
-    if (isMongoOnly) return true;
     const status = await this.getElectionStatusByConstituencyId(constituencyId);
     return status === 'DRAFT' || status === 'SCHEDULED';
   }

@@ -203,20 +203,20 @@ class ReceiptService {
         if (client) {
           const dbName = getMongoDbName();
           const vrCol = client.db(dbName).collection('vote_receipts');
-          const doc = await vrCol.findOne({ $or: [{ student_id: parseInt(studentId), election_id: parseInt(electionId) }, { studentId: parseInt(studentId), electionId: parseInt(electionId) }] });
+          const doc = await vrCol.findOne({ $or: [{ student_id: String(studentId), election_id: String(electionId) }, { studentId: String(studentId), electionId: String(electionId) }, { student_id: Number(studentId), election_id: Number(electionId) }] });
           if (!doc) return null;
           let electionName = doc.election_name ?? doc.electionName ?? 'Election';
           let electionStatus = doc.election_status ?? doc.electionStatus ?? 'OPEN';
           try {
             const eCol = client.db(dbName).collection('elections');
             const eId = doc.election_id ?? doc.electionId;
-            if (eId) {
-              const { ObjectId } = require('mongodb');
-              let eDoc = null;
-              try { if (ObjectId.isValid(String(eId))) eDoc = await eCol.findOne({ _id: new ObjectId(String(eId)) }); } catch (_) {}
-              if (!eDoc) eDoc = await eCol.findOne({ $or: [{ postgresId: parseInt(eId) }, { id: parseInt(eId) }] });
-              if (eDoc) { electionName = eDoc.name || electionName; electionStatus = eDoc.status || electionStatus; }
-            }
+if (eId) {
+                const { ObjectId } = require('mongodb');
+                let eDoc = null;
+                try { if (ObjectId.isValid(String(eId))) eDoc = await eCol.findOne({ _id: new ObjectId(String(eId)) }); } catch (_) {}
+                if (!eDoc) eDoc = await eCol.findOne({ $or: [{ _id: String(eId) }, { postgresId: parseInt(eId) }, { postgresId: String(eId) }, { id: parseInt(eId) }, { id: String(eId) }] });
+                if (eDoc) { electionName = eDoc.name || electionName; electionStatus = eDoc.status || electionStatus; }
+              }
           } catch (_) {}
           return {
             receiptId: doc._id ? String(doc._id) : doc.id,

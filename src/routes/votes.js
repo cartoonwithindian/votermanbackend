@@ -18,6 +18,11 @@ const { voteLimiter } = require('../middleware/rateLimiter');
 // POST /api/v1/elections/:electionId/votes - Submit a vote (authenticated only)
 router.post('/:electionId/votes', requireAuth, csrfProtection, voteLimiter, voteController.submitVote.bind(voteController));
 
+// POST /api/v1/elections/:electionId/votes/ballot - Submit an atomic ballot of
+// selections for one constituency/election, all-or-nothing (authenticated only).
+// Defined BEFORE /:electionId/votes/:id style routes to avoid matching.
+router.post('/:electionId/votes/ballot', requireAuth, csrfProtection, voteLimiter, voteController.submitBallot.bind(voteController));
+
 // GET /api/v1/elections/:electionId/votes/my-constituency - Student's own CR seat (authenticated only)
 router.get('/:electionId/votes/my-constituency', requireAuth, voteController.getMyConstituency.bind(voteController));
 
