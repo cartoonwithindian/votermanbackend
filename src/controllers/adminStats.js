@@ -23,15 +23,38 @@ async function getStats(req, res) {
         return res.json(cached);
       }
     }
-    // Atlas M10 — Postgres not configured — return empty stats with 200 instead of 500.
-    // Try Mongo ping with 2s timeout to verify connectivity, otherwise just return zeros.
+    // Atlas M10 — Postgres not configured — gather real counts from Mongo.
     try {
       const client = await getSharedClient();
-      if (client) {
-        await client.db(getMongoDbName()).command({ ping: 1 }).catch(() => {});
+      if (!client) throw new Error('MongoDB not configured');
+      const dbMongo = client.db(getMongoDbName());
+      const [studentsTotal, studentsActive, electionsTotal, electionsOpen, candidatesTotal, votesTotal, pendingApps] = await Promise.all([
+        dbMongo.collection('students').countDocuments({ role: 'STUDENT' }),
+        dbMongo.collection('students').countDocuments({ role: 'STUDENT', isActive: true }),
+        dbMongo.collection('elections').countDocuments(),
+        dbMongo.collection('elections').countDocuments({ status: 'OPEN' }),
+        dbMongo.collection('candidates').countDocuments({ isActive: true }),
+        dbMongo.collection('votes').countDocuments(),
+        dbMongo.collection('candidate_applications').countDocuments({ status: 'under_review' }),
+      ]);
+      const payload = {
+        data: {
+          students: { total: studentsTotal, active: studentsActive, voting_eligible: studentsActive },
+          elections: { total: electionsTotal, open: electionsOpen, published: 0 },
+          candidates: { total: candidatesTotal },
+          votes: { total: votesTotal, unique_voters: 0 },
+          accessRequests: { total: 0, pending: 0 },
+          pendingCandidateApplications: pendingApps,
+          generatedAt: new Date().toISOString(),
+        },
+      };
+      if (cacheKey) {
+        await redisCache.setKey(cacheKey, payload, 3);
       }
+      memoryCacheSet('admin:stats:mem:v1', payload, 3000);
+      return res.json(payload);
     } catch (e) {
-      console.warn('admin stats mongo ping failed:', e.message);
+      console.warn('admin stats mongo query failed:', e.message);
     }
     const payload = {
       data: {
@@ -45,9 +68,9 @@ async function getStats(req, res) {
       },
     };
     if (cacheKey) {
-      await redisCache.setKey(cacheKey, payload, 12);
+      await redisCache.setKey(cacheKey, payload, 3);
     }
-    memoryCacheSet('admin:stats:mem:v1', payload, 12000);
+    memoryCacheSet('admin:stats:mem:v1', payload, 3000);
     return res.json(payload);
   }
   try {

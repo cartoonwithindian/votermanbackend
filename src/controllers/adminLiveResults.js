@@ -20,7 +20,7 @@ async function getLive(req, res) {
     if (cacheKey) {
       const cached = await redisCache.getKey(cacheKey);
       if (cached !== null) {
-        memoryCacheSet('admin:live:mem:v1', cached, 12000);
+        memoryCacheSet('admin:live:mem:v1', cached, 3000);
         return res.json(cached);
       }
     }
@@ -37,19 +37,50 @@ async function getLive(req, res) {
         dbMongo.collection('votes').countDocuments(),
         dbMongo.collection('candidate_applications').countDocuments({ status: 'under_review' }),
       ]);
-      const leaderboard = await dbMongo.collection('candidates').aggregate([
-        { $match: { isActive: true } },
-        { $lookup: { from: 'positions', localField: 'positionId', foreignField: '_id', as: 'pos' } },
-        { $unwind: { path: '$pos', preserveNullAndEmptyArrays: true } },
-        { $lookup: { from: 'constituencies', localField: 'pos.constituencyId', foreignField: '_id', as: 'ct' } },
-        { $unwind: { path: '$ct', preserveNullAndEmptyArrays: true } },
-        { $lookup: { from: 'elections', localField: 'ct.electionId', foreignField: '_id', as: 'e' } },
-        { $unwind: { path: '$e', preserveNullAndEmptyArrays: true } },
-        { $lookup: { from: 'votes', localField: '_id', foreignField: 'candidateId', as: 'vs' } },
-        { $project: { candidate_id: '$_id', candidate_name: '$name', position_name: '$pos.name', election_id: '$e._id', election_name: '$e.name', scope_name: '$ct.name', votes: { $size: '$vs' } } },
-        { $sort: { votes: -1, candidate_name: 1 } },
-        { $limit: 10 },
-      ]).toArray();
+      const [positions, constituencies, elections] = await Promise.all([
+        dbMongo.collection('positions').find({}).toArray(),
+        dbMongo.collection('constituencies').find({}).toArray(),
+        dbMongo.collection('elections').find({}).toArray(),
+      ]);
+      const positionById = new Map();
+      positions.forEach(p => {
+        positionById.set(String(p._id), p);
+        if (p.postgresId !== undefined && p.postgresId !== null) positionById.set(String(p.postgresId), p);
+      });
+      const constituencyById = new Map();
+      constituencies.forEach(c => {
+        constituencyById.set(String(c._id), c);
+        if (c.postgresId !== undefined && c.postgresId !== null) constituencyById.set(String(c.postgresId), c);
+      });
+      const electionById = new Map();
+      elections.forEach(e => {
+        electionById.set(String(e._id), e);
+        if (e.postgresId !== undefined && e.postgresId !== null) electionById.set(String(e.postgresId), e);
+      });
+      const voteCounts = new Map();
+      const voteDocs = await dbMongo.collection('votes').find({}).project({ candidateId: 1, candidate_id: 1 }).toArray();
+      voteDocs.forEach(v => {
+        const cid = String(v.candidateId ?? v.candidate_id ?? '');
+        if (cid) voteCounts.set(cid, (voteCounts.get(cid) || 0) + 1);
+      });
+      const activeCandidates = await dbMongo.collection('candidates').find({ isActive: true }).toArray();
+      const leaderboard = activeCandidates
+        .map(c => {
+          const pos = positionById.get(String(c.position_id ?? c.positionId ?? ''));
+          const ct = pos ? constituencyById.get(String(pos.constituency_id ?? pos.constituencyId ?? '')) : null;
+          const e = ct ? electionById.get(String(ct.election_id ?? ct.electionId ?? '')) : null;
+          return {
+            candidate_id: String(c._id),
+            candidate_name: c.name,
+            position_name: pos ? pos.name : null,
+            election_id: e ? String(e._id) : null,
+            election_name: e ? e.name : null,
+            scope_name: ct ? ct.name : null,
+            votes: voteCounts.get(String(c._id)) || 0,
+          };
+        })
+        .sort((a, b) => b.votes - a.votes || String(a.candidate_name).localeCompare(String(b.candidate_name)))
+        .slice(0, 10);
       const payload = {
         data: {
           stats: {
@@ -65,9 +96,9 @@ async function getLive(req, res) {
         },
       };
       if (cacheKey) {
-        await redisCache.setKey(cacheKey, payload, 12);
+        await redisCache.setKey(cacheKey, payload, 3);
       }
-      memoryCacheSet('admin:live:mem:v1', payload, 12000);
+      memoryCacheSet('admin:live:mem:v1', payload, 3000);
       return res.json(payload);
     } catch (e) {
       console.error('admin live mongo failed:', e.message);

@@ -285,6 +285,8 @@ try {
               const filter = {};
               if (filters.status && filters.status !== 'all') filter.status = filters.status;
               if (filters.department && filters.department !== 'all') filter.department = filters.department;
+              if (filters.year && filters.year !== 'all') filter.year = normalizeYear(filters.year);
+              if (filters.section && filters.section !== 'all') filter.section = filters.section;
               if (filters.positionId && filters.positionId !== 'all') filter.position_id = filters.positionId;
               docs = await col.find(filter).sort({ submitted_at: -1, createdAt: -1 }).toArray();
             } catch (_) { docs = []; }
@@ -315,7 +317,13 @@ try {
                 electionById.set(String(e._id), e);
                 if (e.postgresId != null) electionById.set(String(e.postgresId), e);
               }
+              const deptFilter = filters.department && filters.department !== 'all' ? String(filters.department).trim().toLowerCase() : null;
+              const yearFilter = filters.year && filters.year !== 'all' ? normalizeYear(filters.year) : null;
+              const sectionFilter = filters.section && filters.section !== 'all' ? String(filters.section).trim().toLowerCase() : null;
               ballotDocs = ballotDocs.filter(doc => {
+                if (deptFilter && String(doc.department ?? '').trim().toLowerCase() !== deptFilter) return false;
+                if (yearFilter && normalizeYear(doc.year) !== yearFilter) return false;
+                if (sectionFilter && String(doc.section ?? '').trim().toLowerCase() !== sectionFilter) return false;
                 const pos = positionById.get(String(doc.position_id ?? doc.positionId ?? ''));
                 if (!pos) return false;
                 const ct = constituentById.get(String(pos.constituency_id ?? pos.constituencyId ?? ''));
