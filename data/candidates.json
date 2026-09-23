@@ -660,39 +660,66 @@
     "profilePhotoUrl": "https://fra.cloud.appwrite.io/v1/storage/buckets/candidate-photos/files/6ab2b45f00075beedfac/view?project=6a961a3200335ef36ba8"
   },
   {
-    "fullName": "TEST BOY ONE",
-    "position": "Class Representative (Boys)",
-    "department": "TEST",
-    "year": "1 Sem",
-    "section": "T1",
-    "email": "testboyone@voteweb.test",
-    "manifesto": "Test CR candidate (Boys) for the TEST class T1 1st Year."
-  },
-  {
-    "fullName": "TEST BOY TWO",
-    "position": "Class Representative (Boys)",
-    "department": "TEST",
-    "year": "1 Sem",
-    "section": "T1",
-    "email": "testboytwo@voteweb.test",
-    "manifesto": "Test CR candidate (Boys) for the TEST class T1 1st Year."
-  },
-  {
-    "fullName": "TEST GIRL ONE",
+    "fullName": "Serwin BM",
     "position": "Class Representative (Girls)",
     "department": "TEST",
     "year": "1 Sem",
     "section": "T1",
-    "email": "testgirlone@voteweb.test",
-    "manifesto": "Test CR candidate (Girls) for the TEST class T1 1st Year."
+    "email": "serwinbm@gmail.com",
+    "manifesto": "TEST T1 1st Year Class Representative candidate."
   },
   {
-    "fullName": "TEST GIRL TWO",
+    "fullName": "Cartoon With Indian",
     "position": "Class Representative (Girls)",
     "department": "TEST",
     "year": "1 Sem",
     "section": "T1",
-    "email": "testgirltwo@voteweb.test",
-    "manifesto": "Test CR candidate (Girls) for the TEST class T1 1st Year."
+    "email": "cartoonwithindian@gmail.com",
+    "manifesto": "TEST T1 1st Year Class Representative candidate."
+  },
+  {
+    "fullName": "Jfjrihrje",
+    "position": "Class Representative (Girls)",
+    "department": "TEST",
+    "year": "1 Sem",
+    "section": "T1",
+    "email": "jfjrihrje@gmail.com",
+    "manifesto": "TEST T1 1st Year Class Representative candidate."
+  },
+  {
+    "fullName": "Madea Official",
+    "position": "Class Representative (Girls)",
+    "department": "TEST",
+    "year": "1 Sem",
+    "section": "T1",
+    "email": "madea.official1@gmail.com",
+    "manifesto": "TEST T1 1st Year Class Representative candidate."
+  },
+  {
+    "fullName": "Ctrlpluss9",
+    "position": "Class Representative (Girls)",
+    "department": "TEST",
+    "year": "1 Sem",
+    "section": "T1",
+    "email": "ctrlpluss9@gmail.com",
+    "manifesto": "TEST T1 1st Year Class Representative candidate."
+  },
+  {
+    "fullName": "Who07512",
+    "position": "Class Representative (Boys)",
+    "department": "TEST",
+    "year": "1 Sem",
+    "section": "T1",
+    "email": "who07512@gmail.com",
+    "manifesto": "TEST T1 1st Year Class Representative candidate."
+  },
+  {
+    "fullName": "Abastin",
+    "position": "Class Representative (Boys)",
+    "department": "TEST",
+    "year": "1 Sem",
+    "section": "T1",
+    "email": "abastin443@gmail.com",
+    "manifesto": "TEST T1 1st Year Class Representative candidate."
   }
 ]
