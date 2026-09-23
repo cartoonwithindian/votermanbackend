@@ -11,6 +11,7 @@
 const db = require('../db');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getClient: getSharedClient } = require('../db/mongoClient');
+const { normalizeYear } = require('../utils/yearNormalizer');
 const redisCache = require('../utils/redisCache');
 const { memoryCacheGet, memoryCacheSet, memoryCacheDelPrefix } = require('../utils/memoryCache');
 

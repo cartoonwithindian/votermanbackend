@@ -897,8 +897,11 @@ class CandidateService {
         if (!res || !res.value) {
           res = await col.findOneAndUpdate({ $or: [{ id: String(candidateId) }, { id: Number(candidateId) }, { _id: String(candidateId) }, { postgresId: Number(candidateId) }] }, upd, { returnDocument: 'after' });
         }
-        if (!res || !res.value) return null;
-        const d = res.value;
+        if (!res) return null;
+        // Some mongodb driver versions return the doc directly instead of
+        // wrapping it in { value }.
+        const d = res.value || res;
+        if (!d) return null;
         await this.invalidateCandidates();
         return {
           id: d._id ? String(d._id) : d.id,
