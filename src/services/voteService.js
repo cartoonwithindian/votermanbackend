@@ -10,6 +10,7 @@ const { incVotesCast } = require('../monitoring/metrics');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getClient: getSharedClient } = require('../db/mongoClient');
 const { normalizeYear } = require('../utils/yearNormalizer');
+const { normalizeDepartment, normalizeSection } = require('../utils/classList');
 
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
 
@@ -758,14 +759,16 @@ class VoteService {
       return { success: false, error: 'Voting has not started for your class yet', code: 'CLASS_NOT_OPEN', status: 403 };
     }
 
-    const match = (a, b) => (a ?? '').toString().trim().toLowerCase() === (b ?? '').toString().trim().toLowerCase();
-    const matchYear = (a, b) => match(normalizeYear(a), normalizeYear(b));
+    const norm = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+    const matchDept = (a, b) => normalizeDepartment(a) === normalizeDepartment(b);
+    const matchYear = (a, b) => norm(normalizeYear(a), normalizeYear(b));
+    const matchSection = (a, b) => normalizeSection(a ?? '') === normalizeSection(b ?? '');
     const voterDept = student.department ?? student.dept;
     const voterYear = student.year ?? student.year_or_semester ?? student.yearOrSemester;
     const voterSection = student.section ?? '';
-    if (!match(constituency.department, voterDept) ||
+    if (!matchDept(constituency.department, voterDept) ||
         !matchYear(constituency.year, voterYear) ||
-        !match(constituency.section, voterSection)) {
+        !matchSection(constituency.section, voterSection)) {
       return { success: false, error: 'You can only vote for the Class Representative of your own department, year and section', code: 'CONSTITUENCY_MISMATCH', status: 403 };
     }
 

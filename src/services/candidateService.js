@@ -307,6 +307,59 @@ class CandidateService {
   }
 
   /**
+   * Admin-only: list all ballot/master candidate docs (including unplaced
+   * canonical masters with position_id null). Filters are optional and cohort
+   * fields are normalized before comparing. Invoked by the admin candidates
+   * gallery via GET /candidates?scope=all (ADMIN role only).
+   */
+  async listAllCandidates({ limit = 1000, offset = 0, gender, department, year, section } = {}) {
+    if (isMongoOnly) {
+      try {
+        const dbc = await getSharedDb();
+        if (!dbc) return [];
+        const col = dbc.collection('candidates');
+        const docs = await col.find({}).sort({ department: 1, year: 1, section: 1, name: 1 }).toArray();
+        const rows = docs.map(d => ({
+          id: d._id ? String(d._id) : (d.id != null ? String(d.id) : ''),
+          name: d.name || '',
+          gender: d.gender || null,
+          department: d.department ?? null,
+          year: d.year ?? null,
+          section: d.section ?? null,
+          description: d.description ?? d.manifesto ?? '',
+          manifesto: d.manifesto ?? d.description ?? '',
+          image_url: d.image_url ?? d.imageUrl ?? null,
+          profilePhotoUrl: d.image_url ?? d.imageUrl ?? null,
+          email: d.email ?? null,
+          position_id: d.position_id ?? d.positionId ?? null,
+          linked_positions: Array.isArray(d.linked_positions) ? d.linked_positions : Array.isArray(d.linkedPositions) ? d.linkedPositions : [],
+          is_active: d.is_active ?? d.isActive ?? true,
+          position_name: d.position_name ?? 'Class Representative',
+        }));
+        const normEq = (a, b) => {
+          const A = String(a ?? '').trim().toLowerCase();
+          const B = String(b ?? '').trim().toLowerCase();
+          if (!A || !B) return false;
+          return A === B;
+        };
+        let filtered = rows;
+        if (gender && gender !== 'all') filtered = filtered.filter(r => normEq(r.gender, gender));
+        if (department && department !== 'all') filtered = filtered.filter(r => normalizeDepartment(r.department) === normalizeDepartment(department));
+        if (year && year !== 'all') {
+          const ny = normalizeYear(year);
+          filtered = filtered.filter(r => normalizeYear(r.year) === ny);
+        }
+        if (section && section !== 'all') filtered = filtered.filter(r => normalizeSection(r.section ?? '') === normalizeSection(section));
+        return filtered.slice(offset, offset + limit);
+      } catch (e) {
+        console.warn('[candidateService] listAllCandidates failed:', e.message);
+        return [];
+      }
+    }
+    return [];
+  }
+
+  /**
    * Find a single approved candidate by ID for public view.
    */
   async findApprovedById(id) {

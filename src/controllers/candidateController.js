@@ -44,20 +44,35 @@ class CandidateController {
       // Unauthenticated consumers (and authed rows missing class data) keep
       // the previous optional filters.
       const u = req.user;
-      const hasOwnClass = Boolean(u && u.department && u.year);
-      const department = hasOwnClass ? u.department : req.query.department;
-      const year = hasOwnClass ? u.year : req.query.year;
-      const section = hasOwnClass ? (u.section ?? '') : req.query.section;
+      const viewerRole = (u?.role || '').toUpperCase();
+      const scopeAll = viewerRole === 'ADMIN' && req.query.scope === 'all';
 
-      const candidates = await candidateService.findApproved({
-        activeOnly: active_only !== 'false',
-        limit: parseInt(limit) || 100,
-        offset: parseInt(offset) || 0,
-        gender,
-        department,
-        year,
-        section,
-      });
+      let candidates;
+      if (scopeAll) {
+        candidates = await candidateService.listAllCandidates({
+          limit: Math.min(parseInt(limit) || 1000, 5000),
+          offset: parseInt(offset) || 0,
+          gender: req.query.gender,
+          department: req.query.department,
+          year: req.query.year,
+          section: req.query.section,
+        });
+      } else {
+        const hasOwnClass = Boolean(u && u.department && u.year);
+        const department = hasOwnClass ? u.department : req.query.department;
+        const year = hasOwnClass ? u.year : req.query.year;
+        const section = hasOwnClass ? (u.section ?? '') : req.query.section;
+
+        candidates = await candidateService.findApproved({
+          activeOnly: active_only !== 'false',
+          limit: parseInt(limit) || 100,
+          offset: parseInt(offset) || 0,
+          gender,
+          department,
+          year,
+          section,
+        });
+      }
 
       res.json({
         data: candidates,

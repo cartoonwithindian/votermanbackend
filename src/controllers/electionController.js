@@ -54,10 +54,37 @@ class ElectionController {
         excludeDraft: !isStaff,
       });
 
+      // Class-scoped visibility: a student only sees elections whose scope
+      // (department/year/semester/section) matches their OWN class, plus fully
+      // unscoped elections. A single-class election (e.g. BCA 3 Sem A1) must
+      // never be listed for a student of a different class.
+      let visible = elections;
+      if (!isStaff) {
+        const u = req.user;
+        const ud = String(u?.department ?? '').trim().toLowerCase();
+        const uy = u?.year ?? u?.year_or_semester ?? '';
+        const us = String(u?.section ?? '').trim().toLowerCase();
+        visible = (elections || []).filter(e => {
+          const eDept = String(e.department ?? '').trim();
+          const eYear = String(e.year ?? e.semester ?? '').trim();
+          const eSec = String(e.section ?? '').trim();
+          if (!eDept && !eYear && !eSec) return true;
+          if (!ud || !uy) return false;
+          if (eDept && eDept.trim().toLowerCase() !== ud) return false;
+          if (eYear) {
+            const sameRaw = eYear.toLowerCase() === String(uy).trim().toLowerCase();
+            const sameNorm = normalizeYear(eYear) && normalizeYear(eYear) === normalizeYear(uy);
+            if (!sameRaw && !sameNorm) return false;
+          }
+          if (eSec && eSec.trim().toLowerCase() !== us) return false;
+          return true;
+        });
+      }
+
       res.json({
-        data: elections,
+        data: visible,
         meta: {
-          count: elections.length,
+          count: visible.length,
           limit: parsedLimit,
           offset: parseInt(offset) || 0,
         },

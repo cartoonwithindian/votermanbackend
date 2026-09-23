@@ -371,6 +371,7 @@ class ElectionService {
         }
         if (res && res.value) {
           const doc = res.value;
+          await this.syncConstituencyVoting(id, newStatus, client);
           await this.invalidateElections();
           return { election: { id: doc._id || doc.id || doc.postgresId, name: doc.name, status: doc.status, start_time: doc.start_time || doc.startTime || null, end_time: doc.end_time || doc.endTime || null, results_published_at: doc.results_published_at || doc.resultsPublishedAt || null }, previousStatus };
         }
@@ -413,6 +414,32 @@ class ElectionService {
     await this.invalidateElections();
 
     return { election: result.rows[0], previousStatus };
+  }
+
+  /**
+   * Open/close class voting alongside the election: when an election becomes
+   * OPEN/SCHEDULED its constituencies' voting_open flips true; on
+   * CLOSED/DRAFT/PUBLISHED it flips false. Prevents the silent CLASS_NOT_OPEN
+   * block during a live class test run.
+   */
+  async syncConstituencyVoting(electionId, status, client) {
+    try {
+      if (!client) return;
+      const { ObjectId } = require('mongodb');
+      const ctCol = client.db(getMongoDbName()).collection('constituencies');
+      const eid = String(electionId);
+      const openVoting = status === 'OPEN' || status === 'SCHEDULED';
+      const closeVoting = status === 'CLOSED' || status === 'DRAFT' || status === 'PUBLISHED';
+      if (!openVoting && !closeVoting) return;
+      const or = [{ election_id: eid }, { electionId: eid }];
+      if (ObjectId.isValid(eid)) or.push({ election_id: new ObjectId(eid) }, { electionId: new ObjectId(eid) });
+      await ctCol.updateMany(
+        { $or: or },
+        { $set: { voting_open: openVoting, votingOpen: openVoting, updated_at: new Date(), updatedAt: new Date() } }
+      );
+    } catch (e) {
+      console.warn('[electionService] syncConstituencyVoting failed:', e.message);
+    }
   }
 
   /**
