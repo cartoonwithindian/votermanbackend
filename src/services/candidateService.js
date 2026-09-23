@@ -91,7 +91,7 @@ class CandidateService {
           electionStatus.set(String(e._id), String(e.status || '').toUpperCase());
           if (e.postgresId != null) electionStatus.set(String(e.postgresId), String(e.status || '').toUpperCase());
         }
-        const open = ['OPEN', 'DRAFT', 'SCHEDULED'];
+        const open = ['OPEN', 'DRAFT', 'SCHEDULED', 'CLOSED', 'PUBLISHED'];
         return rows.filter(r => {
           const pos = positionById.get(String(r.position_id ?? r.positionId ?? ''));
           if (!pos) return false;
