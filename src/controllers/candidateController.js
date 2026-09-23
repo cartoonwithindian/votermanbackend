@@ -182,12 +182,12 @@ class CandidateController {
       const applicationId = application_id != null && application_id !== '' ? application_id : null;
       const isApplicationEdit = applicationId !== null;
 
+      let app = null;
       if (isApplicationEdit) {
         const targetId = isMongoOnly ? String(applicationId) : parseInt(applicationId);
-        const app = await candidateAppService.getById(targetId);
-        if (!app) {
-          return res.status(404).json({ error: 'Not Found', message: 'Candidate application not found' });
-        }
+        app = await candidateAppService.getById(targetId);
+      }
+      if (app) {
         const status = await candidateService.getElectionStatusByPositionId(app.positionId);
         if (status === 'CLOSED') {
           return res.status(403).json({
@@ -195,6 +195,7 @@ class CandidateController {
             message: 'Cannot modify candidate when election is CLOSED',
           });
         }
+        const targetId = isMongoOnly ? String(app.id) : parseInt(app.id);
         const updated = await candidateAppService.adminUpdateContent(targetId, {
           fullName: name,
           bio: bio !== undefined ? bio : description,
@@ -220,7 +221,7 @@ class CandidateController {
 
       const candidate = await candidateService.update(isMongoOnly ? id : parseInt(id), {
         name,
-        description,
+        description: bio !== undefined ? bio : description,
         image_url,
         display_order,
         department,
