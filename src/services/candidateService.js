@@ -208,14 +208,8 @@ class CandidateService {
             dbc.collection('elections').find({}).toArray(),
           ]);
           if (mongoRows && mongoRows.length) {
-            const preloaded = { positions: posDocs, constituencies: ctDocs, elections: elecDocs };
             const enriched = await this.enrichPositionNames(mongoRows, posDocs);
-            const inOpen = await this.filterOpenElectionRows(enriched, preloaded);
-            // Ballot rows in Mongo store raw candidate fields (_id, name,
-            // position_name, image_url/description). Map to the same
-            // CandidateRow shape the Postgres/JSON paths return so the
-            // frontend always sees `id`, `manifesto`, `election_*`.
-            const mapped = this.mapBallotRow(inOpen);
+            const mapped = this.mapBallotRow(enriched);
             const { rows } = mongoStore.filterMongoRows(mapped, { gender, department, year, section, limit, offset });
             return rows;
           }
@@ -375,10 +369,8 @@ class CandidateService {
             dbc.collection('elections').find({}).toArray(),
           ]);
           if (mongoRows && mongoRows.length) {
-            const preloaded = { positions: posDocs, constituencies: ctDocs, elections: elecDocs };
             const enriched = await this.enrichPositionNames(mongoRows, posDocs);
-            const inOpen = await this.filterOpenElectionRows(enriched, preloaded);
-            const mapped = this.mapBallotRow(inOpen);
+            const mapped = this.mapBallotRow(enriched);
             const found = mapped.find(r => String(r.id) === String(id));
             if (found) return found;
           }
