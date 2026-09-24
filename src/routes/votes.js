@@ -23,6 +23,10 @@ router.post('/:electionId/votes', requireAuth, csrfProtection, voteLimiter, vote
 // Defined BEFORE /:electionId/votes/:id style routes to avoid matching.
 router.post('/:electionId/votes/ballot', requireAuth, csrfProtection, voteLimiter, voteController.submitBallot.bind(voteController));
 
+// GET /api/v1/elections/my-class-candidates - Candidates standing in the
+// authenticated student's own class (any election status, read-only)
+router.get('/my-class-candidates', requireAuth, voteController.getMyClassCandidates.bind(voteController));
+
 // GET /api/v1/elections/:electionId/votes/my-constituency - Student's own CR seat (authenticated only)
 router.get('/:electionId/votes/my-constituency', requireAuth, voteController.getMyConstituency.bind(voteController));
 

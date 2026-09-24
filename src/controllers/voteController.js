@@ -355,6 +355,84 @@ class VoteController {
     }
   }
 
+  async getMyClassCandidates(req, res, next) {
+    try {
+      const authenticatedStudentId = req.user?.studentId;
+      if (!authenticatedStudentId) {
+        return res.status(401).json({
+          error: 'Unauthorized',
+          message: 'Authentication required.',
+          code: 'AUTH_REQUIRED',
+        });
+      }
+      const empty = { election: null, constituency: null, seats: [] };
+      let department = req.user?.department || null;
+      let year = req.user?.year || null;
+      let section = req.user?.section || '';
+      if ((!department || !year) && isMongoOnly) {
+        try {
+          const client = await getSharedClient();
+          if (client) {
+            const col = client.db(getMongoDbName()).collection(process.env.MONGODB_STUDENTS_COLLECTION || 'students');
+            let doc = null;
+            try { if (ObjectId.isValid(String(authenticatedStudentId))) doc = await col.findOne({ _id: new ObjectId(String(authenticatedStudentId)) }); } catch (_) {}
+            if (!doc) doc = await col.findOne({ $or: [{ postgresId: parseInt(authenticatedStudentId) }, { id: String(authenticatedStudentId) }, { _id: String(authenticatedStudentId) }] });
+            if (doc) {
+              department = department || doc.department || null;
+              year = year || doc.year || doc.year_or_semester || doc.yearOrSemester || null;
+              section = req.user?.section || doc.section || '';
+            }
+          }
+        } catch (_) {}
+      }
+      if (!department || !year) return res.json({ data: empty });
+      const normYear = normalizeYear(year);
+      const electionService = require('../services/electionService');
+      const positionService = require('../services/positionService');
+      const candidateService = require('../services/candidateService');
+      let elections = [];
+      try { elections = await electionService.findAll({ limit: 100, offset: 0 }); } catch (_) { elections = []; }
+      if (!Array.isArray(elections)) elections = [];
+      const matches = [];
+      for (const e of elections) {
+        const eid = e.id ?? e._id ?? e.postgresId;
+        if (eid === undefined || eid === null) continue;
+        let ct = null;
+        try {
+          ct = await constituencyService.findMatching({ electionId: String(eid), department, year: normYear, section: section || '' });
+        } catch (_) { ct = null; }
+        if (ct) matches.push({ election: e, constituency: ct });
+      }
+      if (!matches.length) return res.json({ data: empty });
+      const rank = { OPEN: 0, SCHEDULED: 1, DRAFT: 2, CLOSED: 3, PUBLISHED: 4 };
+      matches.sort((a, b) => ((rank[a.election.status] ?? 9) - (rank[b.election.status] ?? 9)));
+      const best = matches[0];
+      let positions = [];
+      try { positions = await positionService.findByConstituencyId(best.constituency.id, { activeOnly: false }); } catch (_) { positions = []; }
+      positions = (Array.isArray(positions) ? positions : []).filter((p) => (p.is_active ?? p.isActive ?? true) !== false);
+      const seats = [];
+      for (const p of positions) {
+        const pid = p.id ?? (p._id ? String(p._id) : null);
+        if (!pid) continue;
+        let cands = [];
+        try { cands = await candidateService.findByPositionId(pid, { activeOnly: false, limit: 100 }); } catch (_) { cands = []; }
+        cands = (Array.isArray(cands) ? cands : []).filter((c) => (c.is_active ?? c.isActive ?? true) !== false);
+        seats.push({
+          position: { id: String(pid), name: p.name },
+          candidates: cands.map((c) => ({ id: String(c.id ?? c._id), name: c.name, gender: c.gender ?? null, photo: c.image_url ?? c.imageUrl ?? null })),
+        });
+      }
+      const be = best.election;
+      return res.json({ data: {
+        election: { id: String(be.id ?? be._id ?? be.postgresId), name: be.name, status: be.status },
+        constituency: { id: String(best.constituency.id), name: best.constituency.name, department: best.constituency.department, year: best.constituency.year, section: best.constituency.section, voting_open: best.constituency.voting_open },
+        seats,
+      } });
+    } catch (err) {
+      return res.json({ data: { election: null, constituency: null, seats: [] } });
+    }
+  }
+
   /**
    * GET /api/v1/elections/:electionId/votes/receipt
    * Get the authenticated student's receipt for an election (no voteId needed)
