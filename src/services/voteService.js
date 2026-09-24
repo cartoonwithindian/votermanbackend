@@ -1088,9 +1088,9 @@ class VoteService {
             cand.status = 'not_elected';
           }
         }
-
-        groups[gid].positions = Object.values(groups[gid].positions);
       }
+
+      groups[gid].positions = Object.values(groups[gid].positions);
     }
 
     return {
