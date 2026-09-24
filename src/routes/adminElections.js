@@ -13,7 +13,21 @@ const { csrfProtection } = require('../middleware/csrfProtection');
 const { getMongoDbName } = require('../utils/mongoDbName');
 const { getClient: getSharedClient } = require('../db/mongoClient');
 const { ObjectId } = require('mongodb');
+const { normalizeYear } = require('../utils/yearNormalizer');
+const { normalizeDepartment, normalizeSection } = require('../utils/classList');
 const isMongoOnly = !process.env.DATABASE_URL && !!(process.env.MONGODB_URI || process.env.MONGODB_URL);
+
+function mongoElectionRefMatch(eid, oid) {
+  const or = [{ election_id: eid }, { electionId: eid }, { election_id: Number(eid) }, { electionId: Number(eid) }];
+  if (oid) or.push({ election_id: oid }, { electionId: oid });
+  return { $or: or };
+}
+
+const PUPIL_PROJECTION = {
+  name: 1, department: 1, year: 1, section: 1,
+  rollNumber: 1, roll_number: 1, student_id: 1,
+  externalId: 1, external_id: 1,
+};
 
 // GET /api/v1/admin/elections - List all elections (admin only)
 router.get('/', requireAdmin, electionController.list.bind(electionController));
@@ -39,30 +53,124 @@ router.post('/:id/publish', requireAdmin, csrfProtection, electionController.pub
 // students so admins can chase an election's lagging classes.
 router.get('/:id/turnout', requireAdmin, async (req, res) => {
   if (isMongoOnly) {
-    // Mongo-only mode: avoid Postgres queries that throw 500
-    // Try to read election from voteweb.elections, otherwise return empty turnout
     try {
       const client = await getSharedClient();
-      if (client) {
-        const col = client.db(getMongoDbName()).collection('elections');
-        const rawId = String(req.params.id);
-        const eid = ObjectId.isValid(rawId) ? rawId : parseInt(rawId, 10);
-        let doc = null;
-        try { if (ObjectId.isValid(String(eid))) doc = await col.findOne({ _id: new ObjectId(String(eid)) }); } catch (_) {}
-        if (!doc) doc = await col.findOne({ $or: [{ postgresId: eid }, { id: eid }] });
-        if (doc) {
-          return res.json({ data: { election: { id: doc._id || doc.id || doc.postgresId, name: doc.name, status: doc.status || 'DRAFT' }, totals: { total_authorized: 0, total_voted: 0, total_pending: 0, participation_pct: 0 }, classes: [] } });
-        }
+      if (!client) {
+        return res.json({ data: { election: { id: String(req.params.id), name: 'Election', status: 'DRAFT' }, totals: { total_authorized: 0, total_voted: 0, total_pending: 0, participation_pct: 0 }, classes: [] } });
       }
+      const dbName = getMongoDbName();
+      const rawId = String(req.params.id);
+      const eid = ObjectId.isValid(rawId) ? rawId : String(rawId);
+      const oid = ObjectId.isValid(eid) ? new ObjectId(eid) : null;
+
+      const eCol = client.db(dbName).collection('elections');
+      let doc = null;
+      try { if (oid) doc = await eCol.findOne({ _id: oid }); } catch (_) {}
+      if (!doc) doc = await eCol.findOne({ $or: [{ postgresId: Number(eid) }, { id: Number(eid) }, { postgresId: eid }, { id: eid }] });
+      if (!doc) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Election not found.' } });
+      }
+
+      const refMatch = mongoElectionRefMatch(eid, oid);
+      const ctCol = client.db(dbName).collection('constituencies');
+      const cts = await ctCol.find({ ...refMatch, is_active: { $ne: false } }, { projection: { department: 1, year: 1, section: 1 } }).toArray();
+      const classDefs = cts.map((c) => ({
+        department: c.department || 'Unassigned',
+        year: c.year || '-',
+        section: c.section == null ? '' : String(c.section),
+      }));
+      const keyOf = (d, y, s) => [normalizeDepartment(d || ''), normalizeYear(y || '') || '-', normalizeSection(s == null ? '' : s)].join('|');
+
+      const pupilsCol = client.db(dbName).collection('students');
+      const flagEligible = await pupilsCol.find({
+        $or: [{ isActive: true }, { is_active: true }],
+        $or: [{ votingEligible: true }, { voting_eligible: true }],
+      }, { projection: PUPIL_PROJECTION }).toArray();
+
+      const authCol = client.db(dbName).collection('voter_authorizations');
+      const auths = await authCol.find(
+        { ...refMatch, $or: [{ is_authorized: { $ne: false } }, { isAuthorized: { $ne: false } }] },
+        { projection: { student_id: 1, studentId: 1 } }
+      ).toArray();
+      const authIds = new Set(auths.flatMap((a) => [a.student_id, a.studentId]).filter((x) => x != null).map((x) => String(x)));
+      const authNums = [...authIds].map(Number).filter((n) => !isNaN(n));
+      const authPupils = authIds.size
+        ? await pupilsCol.find({
+            $or: [
+              { _id: { $in: [...authIds, ...authNums] } },
+              { postgresId: { $in: [...authIds, ...authNums] } },
+              { student_id: { $in: [...authIds] } },
+            ],
+          }, { projection: PUPIL_PROJECTION }).toArray()
+        : [];
+
+      const eligibleById = new Map();
+      for (const s of [...flagEligible, ...authPupils]) {
+        const k = String(s._id);
+        if (!eligibleById.has(k)) eligibleById.set(k, s);
+      }
+
+      const votesCol = client.db(dbName).collection('votes');
+      const voterRows = await votesCol.aggregate([
+        { $match: refMatch },
+        { $group: { _id: '$student_id' } },
+        { $project: { _id: 0, sid: '$_id' } },
+      ]).toArray();
+      const voterStrIds = voterRows.map((v) => String(v.sid)).filter(Boolean);
+      const voterNums = voterStrIds.map(Number).filter((n) => !isNaN(n));
+      const voterPupils = voterStrIds.length
+        ? await pupilsCol.find({
+            $or: [
+              { _id: { $in: [...voterStrIds, ...voterNums] } },
+              { postgresId: { $in: [...voterStrIds, ...voterNums] } },
+              { id: { $in: [...voterStrIds, ...voterNums] } },
+            ],
+          }, { projection: PUPIL_PROJECTION }).toArray()
+        : [];
+      const votedSet = new Set(voterPupils.map((s) => String(s._id)));
+
+      const classes = classDefs.map((cd) => {
+        const k = keyOf(cd.department, cd.year, cd.section);
+        const eligible = [...eligibleById.values()].filter((s) => keyOf(s.department, s.year, s.section) === k);
+        const votedN = eligible.filter((s) => votedSet.has(String(s._id))).length;
+        const total_authorized = eligible.length;
+        return {
+          department: cd.department,
+          year: cd.year,
+          section: cd.section,
+          total_authorized,
+          voted: votedN,
+          pending: total_authorized - votedN,
+          participation_pct: total_authorized > 0 ? Math.round((votedN / total_authorized) * 1000) / 10 : 0,
+          pending_voters: eligible
+            .filter((s) => !votedSet.has(String(s._id)))
+            .map((s) => ({
+              studentId: String(s._id),
+              student_id: s.student_id || s.externalId || s.external_id || String(s._id),
+              name: s.name,
+              roll_number: s.rollNumber || s.roll_number || null,
+            })),
+        };
+      });
+
+      const totalAuthorized = classes.reduce((a, c) => a + c.total_authorized, 0);
+      const totalVoted = classes.reduce((a, c) => a + c.voted, 0);
+      return res.json({
+        data: {
+          election: { id: String(doc._id || doc.id || doc.postgresId), name: doc.name, status: doc.status || 'DRAFT' },
+          totals: {
+            total_authorized: totalAuthorized,
+            total_voted: totalVoted,
+            total_pending: totalAuthorized - totalVoted,
+            participation_pct: totalAuthorized > 0 ? Math.round((totalVoted / totalAuthorized) * 1000) / 10 : 0,
+          },
+          classes,
+        },
+      });
     } catch (e) {
-      console.warn('admin turnout mongo fallback failed:', e.message);
+      console.warn('admin turnout mongo failed:', e.message);
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Could not load voter turnout.' } });
     }
-    // Fallback: election not found in mongo or no uri — return empty turnout to avoid 500 so /admin/election loads
-    // If id is valid, pretend election exists with empty turnout; otherwise 404
-    const rawId2 = String(req.params.id);
-    const eid2 = ObjectId.isValid(rawId2) ? rawId2 : parseInt(rawId2, 10);
-    if (eid2 === null || eid2 === undefined || eid2 === '' || isNaN(eid2)) return res.status(400).json({ error: { code: 'INVALID_ID', message: 'Invalid election id.' } });
-    return res.json({ data: { election: { id: String(eid2), name: 'Mongo-only election', status: 'DRAFT' }, totals: { total_authorized: 0, total_voted: 0, total_pending: 0, participation_pct: 0 }, classes: [] } });
   }
   try {
     const id = parseInt(req.params.id, 10);
