@@ -152,8 +152,10 @@ router.get('/elections/:id/results', async (req, res) => {
     // Atlas M10 — avoid Postgres 500. voteService.getElectionResultsFull already handles isMongoOnly,
     // but we add explicit 2s Mongo timeout handling and ensure 200 with empty data instead of 500.
     try {
-      const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) {
+      const rawId = String(req.params.id);
+      const { ObjectId: ObjId } = require('mongodb');
+      const id = ObjId.isValid(rawId) ? rawId : parseInt(rawId, 10);
+      if (!ObjId.isValid(rawId) && isNaN(id)) {
         return res.status(400).json({ error: { code: 'INVALID_ID', message: 'Invalid election id.' } });
       }
       const voteService = require('../services/voteService');
