@@ -262,15 +262,17 @@ class ElectionService {
         let res = null;
         try {
           if (filter._id) res = await col.findOneAndUpdate(filter, { $set: updates }, { returnDocument: 'after' });
-          if (!res || !res.value) {
+          const firstDoc = res && typeof res === 'object' ? (Object.prototype.hasOwnProperty.call(res, 'value') ? res.value : res) : null;
+          if (!firstDoc) {
             const alt = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
             res = alt;
           }
         } catch (_) {
           res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
         }
-        if (res && res.value) {
-          const doc = res.value;
+        const updDoc = res && typeof res === 'object' ? (Object.prototype.hasOwnProperty.call(res, 'value') ? res.value : res) : null;
+        if (updDoc) {
+          const doc = updDoc;
           await this.invalidateElections();
           return { id: doc._id || doc.id || doc.postgresId, name: doc.name, description: doc.description || null, status: doc.status || election.status, start_time: doc.start_time || doc.startTime || null, end_time: doc.end_time || doc.endTime || null, updated_at: doc.updated_at || doc.updatedAt || new Date().toISOString() };
         }
@@ -365,7 +367,8 @@ class ElectionService {
         let res = null;
         try {
           if (filter._id) res = await col.findOneAndUpdate(filter, { $set: updates }, { returnDocument: 'after' });
-          if (!res || !res.value) res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
+          const firstDoc = res && typeof res === 'object' ? (Object.prototype.hasOwnProperty.call(res, 'value') ? res.value : res) : null;
+          if (!firstDoc) res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
         } catch (_) {
           res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
         }
@@ -785,12 +788,14 @@ class ElectionService {
         let res = null;
         try {
           if (filter._id) res = await col.findOneAndUpdate(filter, { $set: updates }, { returnDocument: 'after' });
-          if (!res || !res.value) res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
+          const firstDoc = res && typeof res === 'object' ? (Object.prototype.hasOwnProperty.call(res, 'value') ? res.value : res) : null;
+          if (!firstDoc) res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
         } catch (_) {
           res = await col.findOneAndUpdate({ $or: [{ postgresId: Number(id) }, { id: Number(id) }] }, { $set: updates }, { returnDocument: 'after' });
         }
-        if (res && res.value) {
-          const doc = res.value;
+        const pubDoc = res && typeof res === 'object' ? (Object.prototype.hasOwnProperty.call(res, 'value') ? res.value : res) : null;
+        if (pubDoc) {
+          const doc = pubDoc;
           await this.invalidateElections();
           return { election: { id: doc._id || doc.id || doc.postgresId, name: doc.name, status: doc.status, results_published_at: doc.results_published_at || doc.resultsPublishedAt } };
         }
